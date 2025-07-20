@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./scripts/validate-autoinstall-user-data.py:*)"
+      "Bash(./scripts/validate-autoinstall-user-data.py:*)",
+      "Bash(cloud-init schema:*)",
+      "Bash(true)",
+      "Bash(./pre-install-check.sh:*)"
     ],
     "deny": []
   }

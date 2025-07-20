@@ -143,7 +143,7 @@ autoinstall:
     - curtin in-target -- apt-get update
     - curtin in-target -- apt-get upgrade -y
     # Install systemd-cryptenroll with error handling
-    - curtin in-target -- bash -c 'apt-get install -y systemd-cryptenroll || echo "Warning: systemd-cryptenroll installation failed, continuing without TPM2 enrollment support"'
+    - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll installation failed, continuing without TPM2 enrollment support"'
   identity:
     hostname: ubuntu-server
     username: ubuntu
