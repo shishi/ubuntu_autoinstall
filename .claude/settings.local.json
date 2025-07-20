@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/validate-autoinstall-user-data.py:*)"
+    ],
+    "deny": []
+  }
+}
