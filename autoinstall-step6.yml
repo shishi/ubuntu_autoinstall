@@ -8,7 +8,7 @@ autoinstall:
   keyboard:
     layout: us
   source:
-    id: ubuntu-server
+    id: ubuntu-desktop
     search_drivers: true
   network:
     version: 2
