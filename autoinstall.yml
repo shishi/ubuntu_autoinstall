@@ -507,5 +507,4 @@ autoinstall:
     - curtin in-target --target=/target -- systemctl enable first-boot-setup.service
 
   # Reboot after installation
-  shutdown:
-    mode: reboot
+  shutdown: reboot
