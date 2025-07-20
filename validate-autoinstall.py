@@ -112,14 +112,6 @@ def validate_autoinstall(file_path):
             validation_results['root_90'] = root_found
             validation_results['swap_10'] = swap_found
     
-    # Check identity configuration
-    if 'identity' in autoinstall:
-        # Empty identity is OK with interactive sections
-        print("✓ Identity section present (interactive)")
-    else:
-        print("✗ No identity section")
-        all_ok = False
-    
     # Check for TPM2 packages
     if 'packages' in autoinstall:
         tpm_packages = ['tpm2-tools', 'systemd-cryptenroll']

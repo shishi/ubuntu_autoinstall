@@ -150,10 +150,8 @@ autoinstall:
         path: none
 
   # Identity configuration will be provided interactively
-  identity:
-    hostname: ""
-    username: ""
-    password: ""
+  # Do not include empty identity section when using interactive-sections
+  # identity:
 
   # SSH configuration
   ssh:
