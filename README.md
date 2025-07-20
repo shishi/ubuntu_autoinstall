@@ -24,14 +24,6 @@ Ubuntu のインストール中に、autoinstall設定の場所を尋ねられ�
 https://raw.githubusercontent.com/shishi/ubuntu_autoinstall/main/autoinstall.yml
 ```
 
-#### ブートパラメータで指定
-
-GRUBメニューで`e`キーを押して編集モードに入り、以下のパラメータを追加：
-
-```
-autoinstall ds=nocloud-net;s=https://raw.githubusercontent.com/shishi/ubuntu_autoinstall/main/
-```
-
 ### 方法2: インタラクティブインストーラーでの入力
 
 Ubuntu 24.04のインストーラーでは、以下のタイミングでautoinstall設定を指定できます：
