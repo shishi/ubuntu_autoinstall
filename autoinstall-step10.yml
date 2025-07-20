@@ -159,31 +159,91 @@ autoinstall:
     - curtin in-target -- apt-get upgrade -y
     # Install systemd-cryptenroll with error handling
     - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll installation failed, continuing without TPM2 enrollment support"'
-    # Generate and save LUKS recovery key
-    - curtin in-target -- mkdir -p /root/.luks
-    - 'curtin in-target -- bash -c "echo TemporaryInsecurePassword2024! | cryptsetup luksAddKey /dev/mapper/dm-crypt-main --key-file=- --key-slot=1 --force-password /root/.luks/recovery-key.txt && chmod 600 /root/.luks/recovery-key.txt"'
+    # Generate recovery key and display it for backup
+    - |
+      curtin in-target -- bash -c '
+      mkdir -p /root/.luks
+      # Generate a random recovery key
+      openssl rand -base64 32 > /root/.luks/recovery-key.txt
+      chmod 600 /root/.luks/recovery-key.txt
+      
+      # Create a notice file for the user
+      cat > /root/IMPORTANT-BACKUP-RECOVERY-KEY.txt << "EOF"
+      ==========================================
+      IMPORTANT: BACKUP YOUR LUKS RECOVERY KEY!
+      ==========================================
+      
+      Your LUKS recovery key is stored in:
+      /root/.luks/recovery-key.txt
+      
+      YOU MUST BACKUP THIS KEY EXTERNALLY!
+      - Copy to a USB drive
+      - Print and store securely
+      - Save to a password manager
+      
+      Without this key, you cannot recover your data if you forget your password!
+      
+      To display the key:
+      sudo cat /root/.luks/recovery-key.txt
+      
+      To copy to USB (example):
+      sudo cp /root/.luks/recovery-key.txt /media/usb/luks-recovery-key-$(hostname)-$(date +%Y%m%d).txt
+      ==========================================
+      EOF
+      chmod 644 /root/IMPORTANT-BACKUP-RECOVERY-KEY.txt
+      '
+    # Store recovery key info for later use (will be added to LUKS on first boot)
+    - |
+      curtin in-target -- bash -c '
+      cat > /root/.luks/add-recovery-key.sh << "EOF"
+      #!/bin/bash
+      # This script will be run on first boot to add the recovery key
+      LUKS_DEVICE=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      if [ -n "$LUKS_DEVICE" ] && [ -f /root/.luks/recovery-key.txt ]; then
+        echo "TemporaryInsecurePassword2024!" | cryptsetup luksAddKey "$LUKS_DEVICE" /root/.luks/recovery-key.txt --key-file=-
+        echo "Recovery key has been added to LUKS device"
+        rm -f /root/.luks/add-recovery-key.sh
+      fi
+      EOF
+      chmod +x /root/.luks/add-recovery-key.sh
+      '
     # Create a script for TPM2 enrollment (to be run after first boot when TPM is available)
     - |
       curtin in-target -- bash -c 'cat > /usr/local/bin/enroll-tpm2-luks.sh << "EOF"
       #!/bin/bash
       set -euo pipefail
       
-      # Check if TPM2 is available
-      if ! systemd-cryptenroll --tpm2-device=list &>/dev/null; then
-          echo "TPM2 device not found or not supported"
-          exit 1
-      fi
-      
       # Find the LUKS device
-      LUKS_DEVICE=$(lsblk -nlo NAME,TYPE | grep crypt | head -1 | awk '\''{ print $1 }'\'')
+      LUKS_DEVICE=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
       if [ -z "$LUKS_DEVICE" ]; then
           echo "No LUKS encrypted device found"
           exit 1
       fi
       
+      # Add recovery key if script exists
+      if [ -x /root/.luks/add-recovery-key.sh ]; then
+          echo "Adding recovery key to LUKS..."
+          /root/.luks/add-recovery-key.sh
+          
+          # Display warning
+          echo ""
+          echo "============================================"
+          echo "WARNING: LUKS RECOVERY KEY NEEDS BACKUP!"
+          echo "============================================"
+          echo "Location: /root/.luks/recovery-key.txt"
+          echo "Please backup this key to external media!"
+          echo "============================================"
+      fi
+      
+      # Check if TPM2 is available
+      if ! systemd-cryptenroll --tpm2-device=list &>/dev/null; then
+          echo "TPM2 device not found or not supported"
+          exit 0
+      fi
+      
       # Enroll TPM2
       echo "Enrolling TPM2 for automatic unlock..."
-      echo "TemporaryInsecurePassword2024!" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "/dev/mapper/$LUKS_DEVICE" --key-file=-
+      echo "TemporaryInsecurePassword2024!" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEVICE" --key-file=-
       
       # Update initramfs
       update-initramfs -u
