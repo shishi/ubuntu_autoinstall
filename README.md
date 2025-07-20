@@ -14,7 +14,36 @@
 
 ## 🚀 クイックスタート
 
-### 1. インストールメディアの準備
+### 方法1: GitHubから直接取得（最も簡単）
+
+#### インストーラーのプロンプトで入力
+
+Ubuntu のインストール中に、autoinstall設定の場所を尋ねられたら、以下のURLを入力：
+
+```
+https://raw.githubusercontent.com/shishi/ubuntu_autoinstall/main/autoinstall.yml
+```
+
+#### ブートパラメータで指定
+
+GRUBメニューで`e`キーを押して編集モードに入り、以下のパラメータを追加：
+
+```
+autoinstall ds=nocloud-net;s=https://raw.githubusercontent.com/shishi/ubuntu_autoinstall/main/
+```
+
+### 方法2: インタラクティブインストーラーでの入力
+
+Ubuntu 24.04のインストーラーでは、以下のタイミングでautoinstall設定を指定できます：
+
+1. **言語選択後の画面**で、`Tab`キーまたは`F6`キーを押す
+2. **「Enter an autoinstall config location」**のプロンプトが表示される
+3. 以下のいずれかを入力：
+   - GitHubのraw URL: `https://raw.githubusercontent.com/shishi/ubuntu_autoinstall/main/autoinstall.yml`
+
+### 方法3: USBメディアへの配置
+
+#### 1. インストールメディアの準備
 
 ```bash
 # このリポジトリをクローン
@@ -28,7 +57,7 @@ wget https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso
 sudo dd if=ubuntu-24.04-live-server-amd64.iso of=/dev/sdX bs=4M status=progress
 ```
 
-### 2. autoinstall設定の配置
+#### 2. autoinstall設定の配置
 
 USBメディアをマウントして設定ファイルを配置：
 
