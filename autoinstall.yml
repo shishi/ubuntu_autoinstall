@@ -163,6 +163,29 @@ autoinstall:
   # User data for cloud-init (executed after first boot)
   user-data:
     timezone: Asia/Tokyo
+    write_files:
+      # First boot setup service
+      - path: /etc/systemd/system/first-boot-setup.service
+        content: |
+          [Unit]
+          Description=First Boot Setup
+          ConditionPathExists=!/var/lib/first-boot-complete
+          After=multi-user.target
+          
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/local/bin/enroll-tpm2-luks
+          ExecStart=/usr/local/bin/install-nix
+          ExecStartPost=/usr/bin/touch /var/lib/first-boot-complete
+          StandardOutput=journal+console
+          StandardError=journal+console
+          
+          [Install]
+          WantedBy=multi-user.target
+    # Enable the first boot service
+    runcmd:
+      - systemctl enable first-boot-setup.service
 
   # Late commands - executed in the target system before reboot
   late-commands:
@@ -204,29 +227,3 @@ chmod 755 /usr/local/bin/install-nix"'
 
   # Shutdown action after installation
   shutdown: reboot
-
-# Cloud-init modules configuration (outside of autoinstall)
-write_files:
-  # First boot setup service
-  - path: /etc/systemd/system/first-boot-setup.service
-    content: |
-      [Unit]
-      Description=First Boot Setup
-      ConditionPathExists=!/var/lib/first-boot-complete
-      After=multi-user.target
-      
-      [Service]
-      Type=oneshot
-      RemainAfterExit=yes
-      ExecStart=/usr/local/bin/enroll-tpm2-luks
-      ExecStart=/usr/local/bin/install-nix
-      ExecStartPost=/usr/bin/touch /var/lib/first-boot-complete
-      StandardOutput=journal+console
-      StandardError=journal+console
-      
-      [Install]
-      WantedBy=multi-user.target
-
-# Enable the first boot service
-runcmd:
-  - systemctl enable first-boot-setup.service
