@@ -1,0 +1,511 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  # インタラクティブセクション - ユーザー名とホスト名の入力を求める
+  interactive-sections:
+    - identity
+
+  # LTS compatible configuration
+  source:
+    id: ubuntu-server
+    search_drivers: true
+
+  # Locale and keyboard configuration
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  # Network configuration
+  network:
+    version: 2
+    ethernets:
+      any:
+        match:
+          name: "en*"
+        dhcp4: true
+        dhcp6: true
+
+  # Storage configuration with LVM and LUKS encryption
+  storage:
+    config:
+      # Disk selection
+      - type: disk
+        id: disk0
+        match:
+          size: largest
+        ptable: gpt
+        wipe: superblock-recursive
+        preserve: false
+        grub_device: true
+
+      # EFI System Partition (1GB for Ubuntu 24.04)
+      - type: partition
+        id: partition-efi
+        device: disk0
+        size: 1G
+        flag: boot
+        number: 1
+        preserve: false
+
+      # Boot partition (2GB for kernels)
+      - type: partition
+        id: partition-boot
+        device: disk0
+        size: 2G
+        number: 2
+        preserve: false
+
+      # Main partition for LUKS
+      - type: partition
+        id: partition-luks
+        device: disk0
+        size: -1
+        number: 3
+        preserve: false
+        name: partition-luks  # partlabelを設定
+
+      # LUKS encryption with random key (TPM2 will be added post-install)
+      - type: dm_crypt
+        id: luks-root
+        volume: partition-luks
+        key: "!passphrase"
+        # This temporary passphrase is replaced by TPM2 on first boot
+        # Using a complex but known password as autoinstall doesn't support dynamic generation
+        passphrase: "TemporaryUbuntu2024!TPM2WillReplace@InitialBoot#Secure"
+        preserve: false
+        options:
+          - "discard"
+          - "no-read-workqueue"
+          - "no-write-workqueue"
+
+      # LVM on LUKS
+      - type: lvm_volgroup
+        id: vg0
+        name: ubuntu-vg
+        devices:
+          - luks-root
+        preserve: false
+
+      # Root volume (90% of VG)
+      - type: lvm_partition
+        id: lv-root
+        volgroup: vg0
+        name: root
+        size: 90%
+        preserve: false
+
+      # Swap volume (10% of VG)
+      - type: lvm_partition
+        id: lv-swap
+        volgroup: vg0
+        name: swap
+        size: 10%
+        preserve: false
+
+      # Filesystems
+      - type: format
+        id: fs-efi
+        volume: partition-efi
+        fstype: fat32
+        preserve: false
+
+      - type: format
+        id: fs-boot
+        volume: partition-boot
+        fstype: ext4
+        preserve: false
+
+      - type: format
+        id: fs-root
+        volume: lv-root
+        fstype: ext4
+        preserve: false
+
+      - type: format
+        id: fs-swap
+        volume: lv-swap
+        fstype: swap
+        preserve: false
+
+      # Mount points
+      - type: mount
+        id: mount-root
+        device: fs-root
+        path: /
+
+      - type: mount
+        id: mount-boot
+        device: fs-boot
+        path: /boot
+
+      - type: mount
+        id: mount-efi
+        device: fs-efi
+        path: /boot/efi
+
+      - type: mount
+        id: mount-swap
+        device: fs-swap
+        path: none
+
+  # Identity configuration will be provided interactively
+  identity:
+    hostname: ""
+    username: ""
+    password: ""
+
+  # SSH configuration
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # Package selection
+  packages:
+    - tpm2-tools
+    - systemd-cryptenroll
+    - cryptsetup-initramfs
+    - cryptsetup-bin
+    - git
+    - build-essential
+    - pkg-config
+    - libssl-dev
+    - xz-utils
+
+  # User data - executed after first boot
+  user-data:
+    timezone: Asia/Tokyo
+
+
+    # Write setup scripts
+    write_files:
+      # TPM2 enrollment script using systemd-cryptenroll
+      - path: /usr/local/bin/enroll-tpm2-luks
+        permissions: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          # Use the temporary password from storage configuration
+          TEMP_PASS="TemporaryUbuntu2024!TPM2WillReplace@InitialBoot#Secure"
+
+          echo "=== TPM2 LUKS Enrollment ==="
+          
+          # Check TPM2 compatibility
+          echo "Checking TPM2 compatibility..."
+          
+          # First check if TPM2 tools are installed
+          if ! command -v tpm2_getcap >/dev/null 2>&1; then
+              echo "WARNING: TPM2 tools not installed, skipping TPM enrollment"
+              echo "System will continue to use password-based unlock"
+              exit 0
+          fi
+          
+          # Check if TPM device exists
+          if ! [ -e /dev/tpm0 -o -e /dev/tpmrm0 ]; then
+              echo "WARNING: No TPM device found!"
+              echo "Possible reasons:"
+              echo "  - TPM is disabled in BIOS/UEFI settings"
+              echo "  - TPM device driver not loaded"
+              echo "System will continue to use password-based unlock"
+              exit 0
+          fi
+          
+          # Verify TPM 2.0 (not TPM 1.2)
+          if ! tpm2_getcap properties-fixed 2>/dev/null | grep -q "TPM2_PT_FAMILY_INDICATOR.*2\.0"; then
+              echo "WARNING: TPM 2.0 not detected (might be TPM 1.2)"
+              echo "This system requires TPM 2.0 for disk encryption"
+              echo "System will continue to use password-based unlock"
+              exit 0
+          fi
+          
+          echo "✓ TPM 2.0 detected and compatible"
+          
+          # Notify about TPM enrollment progress
+          echo "Starting TPM2 enrollment. This process will:" | wall
+          echo "1. Remove the temporary password" | wall
+          echo "2. Enroll TPM2 for automatic unlock" | wall
+          echo "3. Update boot configuration" | wall
+
+          # Use known LUKS device from storage configuration
+          DEVICE="/dev/disk/by-partlabel/partition-luks"
+          
+          if [ ! -e "$DEVICE" ]; then
+              echo "ERROR: LUKS device not found at $DEVICE!"
+              echo ""
+              echo "=== Troubleshooting Missing LUKS Device ==="
+              echo "1. List all block devices:"
+              echo "   $ lsblk -f"
+              echo ""
+              echo "2. Check for LUKS devices:"
+              echo "   $ sudo blkid -t TYPE=crypto_LUKS"
+              echo ""
+              echo "3. Check partition labels:"
+              echo "   $ ls -la /dev/disk/by-partlabel/"
+              echo ""
+              echo "4. If device exists with different label:"
+              echo "   Update DEVICE variable in this script"
+              echo ""
+              exit 1
+          fi
+              echo "Processing: $DEVICE"
+
+              # Check current key slots
+              echo "Current key slots:"
+              cryptsetup luksDump "$DEVICE" | grep "Key Slot"
+
+              # Remove temporary installation key and enroll TPM2
+              echo "Enrolling TPM2 (this will replace the temporary key)..."
+
+              # Use systemd-cryptenroll               # PCR 0: Firmware
+              # PCR 7: Secure Boot state
+              echo -n "$TEMP_PASS" | systemd-cryptenroll \
+                --tpm2-device=auto \
+                --tpm2-pcrs=0+7 \
+                --wipe-slot=password \
+                "$DEVICE"
+
+              if [ $? -eq 0 ]; then
+                  echo "✓ TPM2 enrollment successful for $DEVICE"
+              else
+                  echo "✗ TPM2 enrollment failed"
+                  echo ""
+                  echo "=== Troubleshooting TPM2 Enrollment Failure ==="
+                  echo "1. Check if Secure Boot is enabled:"
+                  echo "   $ mokutil --sb-state"
+                  echo ""
+                  echo "2. Verify TPM2 is accessible:"
+                  echo "   $ sudo tpm2_getcap properties-fixed"
+                  echo ""
+                  echo "3. Check if TPM2 is cleared (no owner):"
+                  echo "   $ sudo tpm2_getcap handles-persistent"
+                  echo "   If not empty, clear TPM in BIOS or run: sudo tpm2_clear"
+                  echo ""
+                  echo "4. Try manual enrollment:"
+                  echo "   $ sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 $DEVICE"
+                  echo ""
+                  echo "5. Check system logs for details:"
+                  echo "   $ sudo journalctl -xe | grep -i tpm"
+                  echo ""
+                  echo "The system will continue using password-based unlock."
+              fi
+
+          # crypttab is updated in late-commands, no need to update here
+
+          echo "=== TPM2 enrollment complete! ===="
+          echo "The system will now unlock automatically using TPM2."
+          echo ""
+          echo "IMPORTANT: If you update UEFI/BIOS or change Secure Boot,"
+          echo "you may need to re-enroll using a recovery key."
+
+      # Nix setup script
+      - path: /usr/local/bin/setup-nix-multiuser
+        permissions: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          echo "=== Installing Nix ==="
+
+          # Download and install Nix with retry mechanism
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+              echo "Downloading Nix installer (attempt $i/$MAX_RETRIES)..."
+              
+              if curl -L https://nixos.org/nix/install -o /tmp/nix-install.sh; then
+                  echo "✓ Download successful"
+                  chmod +x /tmp/nix-install.sh
+                  
+                  echo "Installing Nix package manager..."
+                  echo "This may take several minutes. Please be patient..." | wall
+                  if sh /tmp/nix-install.sh --daemon; then
+                      echo "✓ Nix installation successful"
+                      rm -f /tmp/nix-install.sh
+                      break
+                  else
+                      echo "✗ Installation failed, will retry..."
+                      rm -f /tmp/nix-install.sh
+                  fi
+              else
+                  echo "✗ Download failed (network issue?)"
+              fi
+              
+              if [ $i -lt $MAX_RETRIES ]; then
+                  echo "Waiting ${RETRY_DELAY} seconds before retry..."
+                  sleep $((RETRY_DELAY * i))  # Exponential backoff
+              else
+                  echo "ERROR: Failed to install Nix after $MAX_RETRIES attempts"
+                  echo ""
+                  echo "=== Troubleshooting Nix Installation Failure ==="
+                  echo "1. Check internet connectivity:"
+                  echo "   $ ping -c 3 nixos.org"
+                  echo "   $ curl -I https://nixos.org"
+                  echo ""
+                  echo "2. Check DNS resolution:"
+                  echo "   $ nslookup nixos.org"
+                  echo "   $ cat /etc/resolv.conf"
+                  echo ""
+                  echo "3. Check disk space:"
+                  echo "   $ df -h /"
+                  echo "   Nix requires at least 5GB free space"
+                  echo ""
+                  echo "4. Try manual installation:"
+                  echo "   $ curl -L https://nixos.org/nix/install | sh -s -- --daemon"
+                  echo ""
+                  echo "5. Use alternative installation method:"
+                  echo "   $ wget https://nixos.org/nix/install -O install.sh"
+                  echo "   $ sh install.sh --daemon"
+                  echo ""
+                  echo "The system will continue without Nix."
+                  exit 1
+              fi
+          done
+
+          # Start daemon
+          echo "Starting Nix daemon..."
+          systemctl start nix-daemon.service
+          
+          # Install essential tools
+          echo "Installing essential Nix tools..."
+          if ! /nix/var/nix/profiles/default/bin/nix profile install nixpkgs#nix-index nixpkgs#cachix nixpkgs#direnv nixpkgs#nix-direnv; then
+              echo "Warning: Some Nix packages failed to install. They can be installed later."
+          fi
+
+          # Garbage collection can be done manually with: nix store gc
+
+          # Nix installer handles all profile setup
+
+          echo "=== Nix installation complete! ==="
+
+          # Log successful installation
+          logger -p info "Nix multi-user installation completed successfully"
+
+          # Nix is now available in PATH
+          echo "Nix is now available in PATH:"
+          echo "  /nix/var/nix/profiles/default/bin"
+          echo ""
+          echo "Please log out and back in, or run: source /etc/profile.d/nix.sh"
+
+      # First boot setup service
+      - path: /etc/systemd/system/first-boot-setup.service
+        content: |
+          [Unit]
+          Description=First Boot Setup (TPM2 + Nix)
+          ConditionPathExists=!/var/lib/first-boot-complete
+          After=multi-user.target network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/bash -c 'echo "[1/3] Starting first boot setup..." | wall'
+          ExecStart=/bin/bash -c 'echo "[2/3] Enrolling TPM2 for disk encryption..." | wall && /usr/local/bin/enroll-tpm2-luks'
+          ExecStart=/bin/bash -c 'echo "[3/3] Installing Nix package manager..." | wall && /usr/local/bin/setup-nix-multiuser'
+          ExecStartPost=/bin/bash -c 'echo "First boot setup completed successfully!" | wall && /usr/bin/touch /var/lib/first-boot-complete'
+          StandardOutput=journal+console
+          StandardError=journal+console
+          TimeoutStartSec=600
+
+          [Install]
+          WantedBy=multi-user.target
+  late-commands:
+    # Check swap size appropriateness
+    - |
+      curtin in-target --target=/target -- bash -c '
+        # Get disk and swap sizes
+        DISK_SIZE_GB=$(lsblk -b -n -o SIZE /dev/disk/by-partlabel/partition-luks 2>/dev/null | head -1 | awk "{print int(\$1/1024/1024/1024)}")
+        SWAP_SIZE_GB=$(free -g | grep Swap | awk "{print \$2}")
+        
+        echo "Disk size: ${DISK_SIZE_GB}GB, Swap size: ${SWAP_SIZE_GB}GB"
+        
+        # Recommend optimal swap size
+        RECOMMENDED_SWAP=0
+        if [ $DISK_SIZE_GB -lt 32 ]; then
+            RECOMMENDED_SWAP=4
+        elif [ $DISK_SIZE_GB -lt 128 ]; then
+            RECOMMENDED_SWAP=8
+        elif [ $DISK_SIZE_GB -lt 512 ]; then
+            RECOMMENDED_SWAP=16
+        else
+            RECOMMENDED_SWAP=32
+        fi
+        
+        # Create swap recommendation file if swap seems inappropriate
+        if [ $SWAP_SIZE_GB -lt $((RECOMMENDED_SWAP - 2)) ] || [ $SWAP_SIZE_GB -gt $((RECOMMENDED_SWAP + 8)) ]; then
+            {
+                echo "=== Swap Size Recommendation ==="
+                echo "Current swap size: ${SWAP_SIZE_GB}GB"
+                echo "Recommended size for ${DISK_SIZE_GB}GB disk: ${RECOMMENDED_SWAP}GB"
+                echo ""
+                echo "The current swap size may not be optimal for your disk size."
+                echo "Consider adjusting the swap percentage in the autoinstall configuration."
+                echo ""
+                echo "Disk Size Guidelines:"
+                echo "- < 32GB disk: 4GB swap"
+                echo "- 32-128GB disk: 8GB swap"
+                echo "- 128-512GB disk: 16GB swap"
+                echo "- > 512GB disk: 32GB swap"
+            } > /root/swap-recommendation.txt
+            echo "Swap size recommendation saved to /root/swap-recommendation.txt"
+        fi
+      '
+    
+    # Add Nix first-boot notification to MOTD
+    - |
+      cat >> /target/etc/motd << 'EOF'
+      
+      Note: Nix package manager will be installed on first boot.
+      This process takes 1-2 minutes. Check status with: sudo journalctl -u first-boot-setup -f
+      
+      EOF
+
+    # Check TPM2 availability and add note if not available
+    - 'curtin in-target --target=/target -- bash -c ''if [ ! -e /dev/tpm0 ] && [ ! -e /dev/tpmrm0 ]; then echo "WARNING - TPM2 device not found during installation" > /root/tpm2-not-found.txt; echo "TPM2 enrollment will be attempted on first boot" >> /root/tpm2-not-found.txt; fi'''
+    
+    # Generate and save recovery key
+    - |
+      curtin in-target --target=/target -- bash -c '
+        DATE=$(date +%Y%m%d)
+        RECOVERY_KEY=$(openssl rand -base64 32)
+        KEY_FILE="/root/luks-recovery-key-$DATE.txt"
+        
+        # Add recovery key to LUKS
+        echo -n "$RECOVERY_KEY" | cryptsetup luksAddKey /dev/disk/by-partlabel/partition-luks -
+        
+        # Save to root directory
+        echo "$RECOVERY_KEY" > "$KEY_FILE"
+        chmod 600 "$KEY_FILE"
+        echo "Recovery key saved to $KEY_FILE"
+        
+        # Also save for the primary user if exists
+        USERNAME=$(grep "^[^:]*:[^:]*:1000:" /etc/passwd | cut -d":" -f1)
+        if [ -n "$USERNAME" ]; then
+          USER_KEY="/home/$USERNAME/luks-recovery-key-$DATE.txt"
+          cp "$KEY_FILE" "$USER_KEY"
+          chown "$USERNAME:$USERNAME" "$USER_KEY"
+          chmod 400 "$USER_KEY"
+          echo "Recovery key also saved to $USER_KEY"
+        fi
+      '
+
+    # Configure crypttab for initramfs
+    - 'LUKS_UUID=$(curtin in-target --target=/target -- blkid -s UUID -o value /dev/disk/by-partlabel/partition-luks) && echo "luks-$LUKS_UUID UUID=$LUKS_UUID none luks,discard,initramfs" > /target/etc/crypttab'
+
+    # Update initramfs with crypto support
+    - curtin in-target --target=/target -- update-initramfs -c -k all
+
+    # Setup sudoers - インストール時に入力されたユーザー名に対応
+    - 'curtin in-target --target=/target -- bash -c ''USERNAME=$(grep "^[^:]*:[^:]*:1000:" /etc/passwd | cut -d":" -f1); if [ -n "$USERNAME" ]; then echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && chmod 440 /etc/sudoers.d/$USERNAME; fi'''
+
+    # Set default kernel parameters for GRUB
+    - 'echo ''GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"'' >> /target/etc/default/grub && echo ''GRUB_CMDLINE_LINUX="rd.luks.options=discard"'' >> /target/etc/default/grub'
+    - curtin in-target --target=/target -- update-grub
+    
+    # Enable services
+    - curtin in-target --target=/target -- systemctl enable first-boot-setup.service
+
+  # Reboot after installation
+  shutdown:
+    mode: reboot
