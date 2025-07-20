@@ -45,8 +45,18 @@ else
     exit 1
 fi
 
-# 4. Check for common issues
-echo -e "\n4️⃣  Checking for common issues..."
+# 4. Command syntax validation
+echo -e "\n4️⃣  Validating command syntax..."
+if python3 validate-commands.py "$CONFIG_FILE" >/dev/null 2>&1; then
+    echo "   ✅ All commands validated"
+else
+    echo "   ❌ Command syntax errors found"
+    python3 validate-commands.py "$CONFIG_FILE" 2>&1 | grep -E "❌|•" | sed 's/^/   /'
+    exit 1
+fi
+
+# 5. Check for common issues
+echo -e "\n5️⃣  Checking for common issues..."
 ISSUES=0
 
 # Check late-commands for common syntax errors
@@ -81,6 +91,7 @@ echo "📊 Validation Summary:"
 echo "   • YAML Syntax: ✅"
 echo "   • Cloud-init Schema: ✅"
 echo "   • Autoinstall Structure: ✅"
+echo "   • Command Syntax: ✅"
 echo "   • Common Issues: $([ $ISSUES -eq 0 ] && echo '✅' || echo "⚠️  $ISSUES warning(s)")"
 echo -e "\n✅ Configuration appears valid and ready for installation"
 echo "================================================================"

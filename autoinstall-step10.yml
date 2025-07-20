@@ -1,9 +1,9 @@
 #cloud-config
 autoinstall:
   version: 1
-  # Step 6: Adding interactive-sections
   interactive-sections:
     - identity
+    - network
   identity:
     hostname: ubuntu-desktop
     username: ubuntu
@@ -13,22 +13,15 @@ autoinstall:
     layout: us
   network:
     version: 2
-    ethernets:
-      any:
-        match:
-          name: "en*"
-        dhcp4: true
-        dhcp6: true
   ssh:
     install-server: true
     allow-pw: true
   source:
     id: ubuntu-desktop
     search_drivers: true
-  # Step 10: Adding LUKS encryption to LVM
+  
   storage:
     config:
-      # Disk selection
       - type: disk
         id: disk0
         match:
@@ -38,7 +31,6 @@ autoinstall:
         preserve: false
         grub_device: true
       
-      # EFI partition
       - type: partition
         id: partition-efi
         device: disk0
@@ -48,7 +40,6 @@ autoinstall:
         number: 1
         preserve: false
       
-      # Boot partition (unencrypted)
       - type: partition
         id: partition-boot
         device: disk0
@@ -56,7 +47,6 @@ autoinstall:
         number: 2
         preserve: false
       
-      # Main partition for LUKS
       - type: partition
         id: partition-main
         device: disk0
@@ -64,14 +54,12 @@ autoinstall:
         number: 3
         preserve: false
       
-      # LUKS encryption layer
       - type: dm_crypt
         id: dm-crypt-main
         volume: partition-main
-        key: "TemporaryInsecurePassword2024!"
+        key: "temporaryPassword!"
         preserve: false
       
-      # LVM on top of LUKS
       - type: lvm_volgroup
         id: vg0
         name: ubuntu-vg
@@ -79,7 +67,6 @@ autoinstall:
           - dm-crypt-main
         preserve: false
       
-      # Swap volume (create first with fixed size)
       - type: lvm_partition
         id: lv-swap
         volgroup: vg0
@@ -87,7 +74,6 @@ autoinstall:
         size: 8G
         preserve: false
       
-      # Root volume (use remaining space)
       - type: lvm_partition
         id: lv-root
         volgroup: vg0
@@ -95,7 +81,6 @@ autoinstall:
         size: -1
         preserve: false
       
-      # Filesystems
       - type: format
         id: fs-efi
         volume: partition-efi
@@ -120,7 +105,6 @@ autoinstall:
         fstype: swap
         preserve: false
       
-      # Mount points
       - type: mount
         id: mount-root
         device: fs-root
@@ -140,7 +124,7 @@ autoinstall:
         id: mount-swap
         device: fs-swap
         path: none
-  # Step 8: Adding TPM2 and crypto related packages
+  
   packages:
     - git
     - build-essential
@@ -151,121 +135,140 @@ autoinstall:
     - pkg-config
     - libssl-dev
     - xz-utils
-  # Step 9: Adding late-commands to install systemd-cryptenroll after system update
-  # Step 10: Adding LUKS recovery key generation
+  
   late-commands:
-    # Update the system first
     - curtin in-target -- apt-get update
     - curtin in-target -- apt-get upgrade -y
-    # Install systemd-cryptenroll with error handling
-    - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll installation failed, continuing without TPM2 enrollment support"'
-    # Generate recovery key and display it for backup
+    - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll not available"'
+    
+    # Generate recovery key
     - |
       curtin in-target -- bash -c '
-      mkdir -p /root/.luks
-      # Generate a random recovery key
-      openssl rand -base64 32 > /root/.luks/recovery-key.txt
-      chmod 600 /root/.luks/recovery-key.txt
+      # Find user home
+      FIRST_USER=$(getent passwd | awk -F: "$3 >= 1000 && $3 < 65534 {print $1; exit}")
+      USER_HOME="${FIRST_USER:+/home/$FIRST_USER}"
+      USER_HOME="${USER_HOME:-/root}"
       
-      # Create a notice file for the user
-      cat > /root/IMPORTANT-BACKUP-RECOVERY-KEY.txt << "EOF"
-      ==========================================
-      IMPORTANT: BACKUP YOUR LUKS RECOVERY KEY!
-      ==========================================
+      # Create recovery key
+      mkdir -p "$USER_HOME/LUKS-Recovery"
+      openssl rand -base64 48 > "$USER_HOME/LUKS-Recovery/recovery-key.txt"
+      chmod 700 "$USER_HOME/LUKS-Recovery"
+      chmod 600 "$USER_HOME/LUKS-Recovery/recovery-key.txt"
       
-      Your LUKS recovery key is stored in:
-      /root/.luks/recovery-key.txt
-      
-      YOU MUST BACKUP THIS KEY EXTERNALLY!
-      - Copy to a USB drive
-      - Print and store securely
-      - Save to a password manager
-      
-      Without this key, you cannot recover your data if you forget your password!
-      
-      To display the key:
-      sudo cat /root/.luks/recovery-key.txt
-      
-      To copy to USB (example):
-      sudo cp /root/.luks/recovery-key.txt /media/usb/luks-recovery-key-$(hostname)-$(date +%Y%m%d).txt
-      ==========================================
+      # Simple README
+      cat > "$USER_HOME/LUKS-Recovery/README.txt" << EOF
+      IMPORTANT: Backup recovery-key.txt immediately!
+      This is your only way to recover data if TPM fails.
       EOF
-      chmod 644 /root/IMPORTANT-BACKUP-RECOVERY-KEY.txt
+      
+      [ -n "$FIRST_USER" ] && chown -R "$FIRST_USER:$FIRST_USER" "$USER_HOME/LUKS-Recovery"
+      
+      # Add recovery key
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      [ -n "$LUKS_DEV" ] && echo "temporaryPassword!" | cryptsetup luksAddKey "$LUKS_DEV" "$USER_HOME/LUKS-Recovery/recovery-key.txt"
       '
-    # Store recovery key info for later use (will be added to LUKS on first boot)
+    
+    # TPM enrollment with automatic notification
     - |
       curtin in-target -- bash -c '
-      cat > /root/.luks/add-recovery-key.sh << "EOF"
-      #!/bin/bash
-      # This script will be run on first boot to add the recovery key
-      LUKS_DEVICE=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
-      if [ -n "$LUKS_DEVICE" ] && [ -f /root/.luks/recovery-key.txt ]; then
-        echo "TemporaryInsecurePassword2024!" | cryptsetup luksAddKey "$LUKS_DEVICE" /root/.luks/recovery-key.txt --key-file=-
-        echo "Recovery key has been added to LUKS device"
-        rm -f /root/.luks/add-recovery-key.sh
-      fi
-      EOF
-      chmod +x /root/.luks/add-recovery-key.sh
-      '
-    # Create a script for TPM2 enrollment (to be run after first boot when TPM is available)
-    - |
-      curtin in-target -- bash -c 'cat > /usr/local/bin/enroll-tpm2-luks.sh << "EOF"
+      cat > /usr/local/bin/tpm-enroll << "EOF"
       #!/bin/bash
       set -euo pipefail
       
-      # Find the LUKS device
-      LUKS_DEVICE=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
-      if [ -z "$LUKS_DEVICE" ]; then
-          echo "No LUKS encrypted device found"
-          exit 1
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      [ -z "$LUKS_DEV" ] && exit 1
+      
+      # Check if already enrolled
+      if [ -f /var/lib/tpm2-enrolled ] && cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
+        exit 0
       fi
       
-      # Add recovery key if script exists
-      if [ -x /root/.luks/add-recovery-key.sh ]; then
-          echo "Adding recovery key to LUKS..."
-          /root/.luks/add-recovery-key.sh
-          
-          # Display warning
-          echo ""
-          echo "============================================"
-          echo "WARNING: LUKS RECOVERY KEY NEEDS BACKUP!"
-          echo "============================================"
-          echo "Location: /root/.luks/recovery-key.txt"
-          echo "Please backup this key to external media!"
-          echo "============================================"
+      # Try enrollment
+      if systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" 2>/dev/null; then
+        touch /var/lib/tpm2-enrolled
+        update-initramfs -u
+        echo "temporaryPassword!" | cryptsetup luksRemoveKey "$LUKS_DEV" 2>/dev/null || true
+        rm -f /etc/tpm-failed  # Clear any previous failure
+      else
+        # Mark failure for notification
+        echo "$(date): TPM enrollment failed" > /etc/tpm-failed
+        exit 1
       fi
-      
-      # Check if TPM2 is available
-      if ! systemd-cryptenroll --tpm2-device=list &>/dev/null; then
-          echo "TPM2 device not found or not supported"
-          exit 0
-      fi
-      
-      # Enroll TPM2
-      echo "Enrolling TPM2 for automatic unlock..."
-      echo "TemporaryInsecurePassword2024!" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEVICE" --key-file=-
-      
-      # Update initramfs
-      update-initramfs -u
-      
-      echo "TPM2 enrollment complete. The system will automatically unlock on next boot if secure boot state hasn'\''t changed."
-      EOF'
-    - curtin in-target -- chmod +x /usr/local/bin/enroll-tpm2-luks.sh
-    # Create systemd service for first-boot TPM enrollment
+      EOF
+      chmod +x /usr/local/bin/tpm-enroll
+      '
+    
+    # Login notification for TPM failure
     - |
-      curtin in-target -- bash -c 'cat > /etc/systemd/system/tpm2-luks-enroll.service << "EOF"
+      curtin in-target -- bash -c '
+      cat > /etc/profile.d/tpm-check.sh << "EOF"
+      #!/bin/bash
+      # Notify user of TPM enrollment failure on every login
+      
+      if [ -f /etc/tpm-failed ] && [ ! -f /var/lib/tpm2-enrolled ]; then
+        echo
+        echo "============================================================"
+        echo "⚠️  SECURITY WARNING: TPM ENROLLMENT FAILED!"
+        echo "============================================================"
+        echo "Your disk encryption is using a weak temporary password."
+        echo
+        echo "Fix this NOW:"
+        echo "  1. Enable TPM in BIOS/UEFI settings"
+        echo "  2. Run: sudo tpm-enroll"
+        echo
+        echo "Details: https://github.com/shishi/ubuntu_autoinstall#tpm-enrollment-failed"
+        echo "============================================================"
+        echo
+        
+        # Also notify via system notification if in GUI
+        if [ -n "$DISPLAY" ]; then
+          notify-send -u critical "TPM Enrollment Failed" "Your disk encryption is at risk. Run: sudo tpm-enroll" 2>/dev/null || true
+        fi
+      fi
+      EOF
+      chmod 644 /etc/profile.d/tpm-check.sh
+      '
+    
+    # Try enrollment during installation
+    - 'curtin in-target -- /usr/local/bin/tpm-enroll || true'
+    
+    # Service for boot-time enrollment
+    - |
+      curtin in-target -- bash -c '
+      cat > /etc/systemd/system/tpm-enroll.service << EOF
       [Unit]
-      Description=Enroll TPM2 for LUKS unlock
-      After=multi-user.target
-      ConditionPathExists=!/var/lib/tpm2-luks-enrolled
+      Description=TPM LUKS Enrollment
+      DefaultDependencies=no
+      Before=sysinit.target
+      After=systemd-modules-load.service
+      ConditionPathExists=!/var/lib/tpm2-enrolled
       
       [Service]
       Type=oneshot
-      ExecStart=/usr/local/bin/enroll-tpm2-luks.sh
-      ExecStartPost=/usr/bin/touch /var/lib/tpm2-luks-enrolled
       RemainAfterExit=yes
+      ExecStart=/usr/local/bin/tpm-enroll
+      Restart=on-failure
+      RestartSec=30
+      StartLimitBurst=5
       
       [Install]
-      WantedBy=multi-user.target
-      EOF'
-    - curtin in-target -- systemctl enable tpm2-luks-enroll.service
+      WantedBy=sysinit.target
+      EOF
+      
+      systemctl enable tpm-enroll.service
+      '
+    
+    # MOTD warning for SSH users
+    - |
+      curtin in-target -- bash -c '
+      cat > /etc/update-motd.d/99-tpm-warning << "EOF"
+      #!/bin/bash
+      if [ -f /etc/tpm-failed ] && [ ! -f /var/lib/tpm2-enrolled ]; then
+        echo
+        echo "*** TPM ENROLLMENT FAILED - SECURITY RISK ***"
+        echo "*** Run: sudo tpm-enroll                  ***"
+        echo
+      fi
+      EOF
+      chmod +x /etc/update-motd.d/99-tpm-warning
+      '
