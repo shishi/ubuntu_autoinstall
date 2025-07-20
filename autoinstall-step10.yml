@@ -79,20 +79,20 @@ autoinstall:
           - dm-crypt-main
         preserve: false
       
-      # Root volume
-      - type: lvm_partition
-        id: lv-root
-        volgroup: vg0
-        name: root
-        size: 90%
-        preserve: false
-      
-      # Swap volume
+      # Swap volume (create first with fixed size)
       - type: lvm_partition
         id: lv-swap
         volgroup: vg0
         name: swap
-        size: 10%
+        size: 8G
+        preserve: false
+      
+      # Root volume (use remaining space)
+      - type: lvm_partition
+        id: lv-root
+        volgroup: vg0
+        name: root
+        size: -1
         preserve: false
       
       # Filesystems
