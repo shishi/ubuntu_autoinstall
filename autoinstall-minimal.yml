@@ -5,11 +5,10 @@ autoinstall:
   keyboard:
     layout: us
   network:
-    network:
-      version: 2
-      ethernets:
-        ens33:
-          dhcp4: true
+    version: 2
+    ethernets:
+      ens33:
+        dhcp4: true
   storage:
     layout:
       name: direct
