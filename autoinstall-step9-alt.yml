@@ -1,0 +1,52 @@
+#cloud-config
+autoinstall:
+  version: 1
+  # Step 6: Adding interactive-sections
+  interactive-sections:
+    - identity
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  source:
+    id: ubuntu-server
+    search_drivers: true
+  network:
+    version: 2
+    ethernets:
+      any:
+        match:
+          name: "en*"
+        dhcp4: true
+        dhcp6: true
+  # Use simple storage layout to avoid bootloader issues
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+  # Step 8: Adding TPM2 and crypto related packages
+  packages:
+    - git
+    - build-essential
+    - curl
+    - tpm2-tools
+    - systemd-cryptenroll
+    - cryptsetup-initramfs
+    - cryptsetup-bin
+    - pkg-config
+    - libssl-dev
+    - xz-utils
+  identity:
+    hostname: ubuntu-server
+    username: ubuntu
+    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
+  ssh:
+    install-server: true
+    allow-pw: true
+  # Step 9: Adding simple late-commands
+  late-commands:
+    # Setup sudoers for the primary user
+    - 'curtin in-target --target=/target -- sh -c "USERNAME=$(getent passwd 1000 | cut -d: -f1); if [ -n \"$USERNAME\" ]; then echo \"$USERNAME ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/$USERNAME && chmod 440 /etc/sudoers.d/$USERNAME; fi"'
+    # Update GRUB settings
+    - curtin in-target --target=/target -- update-grub
+  # Shutdown action
+  shutdown: reboot
