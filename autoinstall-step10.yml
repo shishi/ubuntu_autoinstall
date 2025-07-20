@@ -13,6 +13,20 @@ autoinstall:
     layout: us
   network:
     version: 2
+    ethernets:
+      any-eth:
+        match:
+          name: "en*"
+        dhcp4: true
+        dhcp6: true
+        optional: true
+    wifis:
+      any-wifi:
+        match:
+          name: "wl*"
+        dhcp4: true
+        dhcp6: true
+        optional: true
   ssh:
     install-server: true
     allow-pw: true
