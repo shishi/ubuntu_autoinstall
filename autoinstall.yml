@@ -255,7 +255,8 @@ autoinstall:
               # Remove temporary installation key and enroll TPM2
               echo "Enrolling TPM2 (this will replace the temporary key)..."
 
-              # Use systemd-cryptenroll               # PCR 0: Firmware
+              # Use systemd-cryptenroll
+              # PCR 0: Firmware
               # PCR 7: Secure Boot state
               echo -n "$TEMP_PASS" | systemd-cryptenroll \
                 --tpm2-device=auto \
