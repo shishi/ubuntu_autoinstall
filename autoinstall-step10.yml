@@ -4,12 +4,13 @@ autoinstall:
   # Step 6: Adding interactive-sections
   interactive-sections:
     - identity
+  identity:
+    hostname: ubuntu-desktop
+    username: ubuntu
+    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
   locale: en_US.UTF-8
   keyboard:
     layout: us
-  source:
-    id: ubuntu-desktop
-    search_drivers: true
   network:
     version: 2
     ethernets:
@@ -18,6 +19,12 @@ autoinstall:
           name: "en*"
         dhcp4: true
         dhcp6: true
+  ssh:
+    install-server: true
+    allow-pw: true
+  source:
+    id: ubuntu-desktop
+    search_drivers: true
   # Step 10: Adding LUKS encryption to LVM
   storage:
     config:
@@ -144,91 +151,6 @@ autoinstall:
     - pkg-config
     - libssl-dev
     - xz-utils
-  # Step 11: Adding user-data for cloud-init post-installation configuration
-  user-data:
-    # Create Nix installation script
-    write_files:
-      - path: /usr/local/bin/setup-nix-multiuser
-        permissions: '0755'
-        content: |
-          #!/bin/bash
-          set -euo pipefail
-          
-          # Nix multi-user installation script
-          echo "Installing Nix package manager..."
-          
-          # Check if already installed
-          if [ -f /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
-              echo "Nix is already installed"
-              exit 0
-          fi
-          
-          # Create required users and groups
-          groupadd -r nixbld 2>/dev/null || true
-          for i in $(seq 1 32); do
-              useradd -c "Nix build user $i" -d /var/empty -g nixbld -G nixbld \
-                      -M -N -r -s $(which nologin) nixbld$i 2>/dev/null || true
-          done
-          
-          # Download and run the installer
-          export NIX_INSTALLER_YES=1
-          curl -L https://nixos.org/nix/install | sh -s -- --daemon
-          
-          # Enable and start nix-daemon
-          systemctl enable nix-daemon
-          systemctl start nix-daemon
-          
-          echo "Nix installation complete!"
-      
-      # Create first-boot setup service
-      - path: /etc/systemd/system/first-boot-setup.service
-        permissions: '0644'
-        content: |
-          [Unit]
-          Description=First Boot Setup Tasks
-          After=network-online.target
-          Wants=network-online.target
-          ConditionPathExists=!/var/lib/first-boot-setup-done
-          
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/local/bin/first-boot-setup.sh
-          ExecStartPost=/usr/bin/touch /var/lib/first-boot-setup-done
-          RemainAfterExit=yes
-          StandardOutput=journal+console
-          StandardError=journal+console
-          
-          [Install]
-          WantedBy=multi-user.target
-      
-      # Create first-boot setup script
-      - path: /usr/local/bin/first-boot-setup.sh
-        permissions: '0755'
-        content: |
-          #!/bin/bash
-          set -euo pipefail
-          
-          echo "Running first boot setup..."
-          
-          # Wait for network
-          timeout 30 bash -c 'until ping -c1 google.com &>/dev/null; do sleep 2; done' || true
-          
-          # Install Nix
-          if [ -x /usr/local/bin/setup-nix-multiuser ]; then
-              /usr/local/bin/setup-nix-multiuser || echo "Nix installation failed, continuing..."
-          fi
-          
-          # Run TPM2 enrollment if available
-          if [ -x /usr/local/bin/enroll-tpm2-luks.sh ]; then
-              /usr/local/bin/enroll-tpm2-luks.sh || echo "TPM2 enrollment failed, continuing..."
-          fi
-          
-          echo "First boot setup completed!"
-    
-    # Enable the first-boot service
-    runcmd:
-      - systemctl enable first-boot-setup.service
-  
   # Step 9: Adding late-commands to install systemd-cryptenroll after system update
   # Step 10: Adding LUKS recovery key generation
   late-commands:
@@ -269,10 +191,21 @@ autoinstall:
       echo "TPM2 enrollment complete. The system will automatically unlock on next boot if secure boot state hasn'\''t changed."
       EOF'
     - curtin in-target -- chmod +x /usr/local/bin/enroll-tpm2-luks.sh
-  identity:
-    hostname: ubuntu-desktop
-    username: ubuntu
-    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
-  ssh:
-    install-server: true
-    allow-pw: true
+    # Create systemd service for first-boot TPM enrollment
+    - |
+      curtin in-target -- bash -c 'cat > /etc/systemd/system/tpm2-luks-enroll.service << "EOF"
+      [Unit]
+      Description=Enroll TPM2 for LUKS unlock
+      After=multi-user.target
+      ConditionPathExists=!/var/lib/tpm2-luks-enrolled
+      
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/enroll-tpm2-luks.sh
+      ExecStartPost=/usr/bin/touch /var/lib/tpm2-luks-enrolled
+      RemainAfterExit=yes
+      
+      [Install]
+      WantedBy=multi-user.target
+      EOF'
+    - curtin in-target -- systemctl enable tpm2-luks-enroll.service
