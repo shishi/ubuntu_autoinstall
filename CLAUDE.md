@@ -4,7 +4,7 @@
 This document contains the rules and best practices for Ubuntu autoinstall configurations that I've learned through our work together.
 
 ## System Information
-- **Ubuntu Version**: 22.04 LTS
+- **Ubuntu Version**: 24.04 LTS
 - **Installation Type**: ubuntu-desktop (NOT ubuntu-server)
 - **Target System**: Desktop installation with LVM
 

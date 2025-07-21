@@ -33,7 +33,8 @@ autoinstall:
   source:
     id: ubuntu-desktop
     search_drivers: true
-  
+  shutdown: reboot
+
   storage:
     config:
       - type: disk
@@ -67,9 +68,11 @@ autoinstall:
         size: -1
         number: 3
         preserve: false
+        grub_device: true
       
       - type: dm_crypt
         id: dm-crypt-main
+        dm_name: dm_crypt-main  # Explicitly set the mapper name
         volume: partition-main
         key: "ubuntuKey"
         preserve: false
@@ -270,12 +273,28 @@ autoinstall:
         log "Updating initramfs"
         update-initramfs -u 2>&1 | tee -a "$LOG_FILE"
         
-        # Remove temporary password
+        # Remove temporary password with better verification
         log "Removing temporary password"
-        if echo "ubuntuKey" | cryptsetup luksRemoveKey "$LUKS_DEV" 2>&1 | tee -a "$LOG_FILE"; then
-          log "Temporary password removed"
-        else
-          log "WARNING: Failed to remove temporary password"
+        
+        # Try to remove from all possible slots
+        for attempt in 1 2 3; do
+          log "Removal attempt $attempt"
+          echo ubuntuKey | cryptsetup luksRemoveKey "$LUKS_DEV" 2>&1 | tee -a "$LOG_FILE" || true
+          
+          # Check if password still exists
+          if ! echo ubuntuKey | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" 2>/dev/null; then
+            log "Verified: Temporary password successfully removed on attempt $attempt"
+            break
+          else
+            log "WARNING: Temporary password still exists after attempt $attempt"
+            sleep 2
+          fi
+        done
+        
+        # Final verification
+        if echo ubuntuKey | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" 2>/dev/null; then
+          log "ERROR: Failed to remove temporary password after 3 attempts!"
+          log "Manual removal will be required"
         fi
       else
         echo "$(date): Enrollment failed" > "$FAILED_MARKER"
@@ -503,4 +522,18 @@ autoinstall:
       EOF
       
       systemctl enable tpm-enroll.service
+      '
+    
+    # Fix crypttab to use correct device mapping
+    - |
+      curtin in-target -- bash -c '
+      # Get the UUID of the LUKS device
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEV")
+      
+      # Create proper crypttab entry
+      echo "dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto,tpm2-pcrs=0+7" > /etc/crypttab
+      
+      # Update initramfs with correct crypttab
+      update-initramfs -u -k all
       '

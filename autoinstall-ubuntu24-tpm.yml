@@ -1,0 +1,157 @@
+#cloud-config
+autoinstall:
+  version: 1
+  interactive-sections:
+    - identity
+    - network
+  identity:
+    hostname: ubuntu-desktop
+    username: ubuntu
+    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
+  locale: ja_JP.UTF-8
+  keyboard:
+    layout: us
+  network:
+    version: 2
+    ethernets:
+      any-eth:
+        match:
+          name: "en*"
+        dhcp4: true
+        dhcp6: true
+        optional: true
+    wifis:
+      any-wifi:
+        match:
+          name: "wl*"
+        dhcp4: true
+        dhcp6: true
+        optional: true
+  ssh:
+    install-server: true
+    allow-pw: true
+  source:
+    id: ubuntu-desktop
+    search_drivers: true
+  shutdown: reboot
+
+  # Ubuntu 24.04 supports hybrid layout with TPM
+  storage:
+    layout:
+      name: hybrid
+      encrypted: yes
+    config: []  # Empty config when using layout
+  
+  packages:
+    - git
+    - build-essential
+    - curl
+    - tpm2-tools
+    - cryptsetup-initramfs
+    - cryptsetup-bin
+  late-commands:
+    - curtin in-target -- apt-get update
+    - curtin in-target -- apt-get upgrade -y
+    - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll installation failed"'
+    
+    # Generate recovery key for safety
+    - |
+      curtin in-target -- bash -c '
+      # Find user home
+      FIRST_USER=""
+      for user in $(ls /home 2>/dev/null); do
+        if [ -d "/home/$user" ]; then
+          uid=$(id -u "$user" 2>/dev/null)
+          if [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ]; then
+            FIRST_USER="$user"
+            break
+          fi
+        fi
+      done
+      
+      USER_HOME="${FIRST_USER:+/home/$FIRST_USER}"
+      USER_HOME="${USER_HOME:-/root}"
+      
+      mkdir -p "$USER_HOME/LUKS-Recovery"
+      
+      # Find LUKS device
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      
+      if [ -n "$LUKS_DEV" ]; then
+        # Generate recovery key
+        openssl rand -base64 48 > "$USER_HOME/LUKS-Recovery/recovery-key.txt"
+        chmod 700 "$USER_HOME/LUKS-Recovery"
+        chmod 600 "$USER_HOME/LUKS-Recovery/recovery-key.txt"
+        
+        # Add recovery key - need to use existing passphrase
+        # For hybrid layout, we need to find the temporary passphrase used
+        echo "Adding recovery key will need to be done after first boot"
+        
+        cat > "$USER_HOME/LUKS-Recovery/README.txt" << "READMEEOF"
+      LUKS Recovery Key (Ubuntu 24.04)
+      =================================
+      
+      This directory contains your LUKS disk encryption recovery key.
+      
+      IMPORTANT:
+      - The hybrid layout in Ubuntu 24.04 uses TPM-backed encryption
+      - This recovery key provides emergency access if TPM fails
+      - Backup recovery-key.txt to a secure external location
+      
+      To add the recovery key after first boot:
+      1. Boot the system and let TPM unlock the disk
+      2. Run: sudo systemd-cryptenroll --recovery-key /dev/sda3
+      3. Or manually: sudo cryptsetup luksAddKey /dev/sda3 ~/LUKS-Recovery/recovery-key.txt
+      
+      TPM Information:
+      - TPM2 enrollment is automatic with hybrid layout
+      - PCRs used: 0+7 (firmware + secure boot)
+      - Check status: sudo systemd-cryptenroll /dev/sda3
+      READMEEOF
+        
+        [ -n "$FIRST_USER" ] && chown -R "$FIRST_USER:$FIRST_USER" "$USER_HOME/LUKS-Recovery"
+      fi
+      '
+    
+    # Simple TPM status script for Ubuntu 24.04
+    - |
+      curtin in-target -- bash -c '
+      cat > /usr/local/bin/tpm-status << "EOF"
+      #!/bin/bash
+      
+      echo "=== TPM Enrollment Status (Ubuntu 24.04) ==="
+      echo "Date: $(date)"
+      echo
+      
+      # Find LUKS device
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      
+      if [ -n "$LUKS_DEV" ]; then
+        echo "LUKS Device: $LUKS_DEV"
+        echo
+        
+        # Show enrollment status using systemd-cryptenroll
+        echo "Enrolled methods:"
+        systemd-cryptenroll "$LUKS_DEV" || echo "Failed to check enrollment"
+        
+        echo
+        echo "LUKS header info:"
+        cryptsetup luksDump "$LUKS_DEV" | grep -E "(Keyslots:|Tokens:|^\s*[0-9]+:)"
+      else
+        echo "[ERROR] No LUKS device found"
+      fi
+      
+      echo
+      echo "TPM Device:"
+      if [ -e /dev/tpm0 ] || [ -e /dev/tpmrm0 ]; then
+        echo "[OK] TPM device present"
+        ls -la /dev/tpm* 2>/dev/null
+      else
+        echo "[FAIL] No TPM device found"
+      fi
+      
+      echo
+      echo "For more details: sudo journalctl -u systemd-cryptsetup@*"
+      EOF
+      chmod +x /usr/local/bin/tpm-status
+      '
