@@ -58,11 +58,21 @@ sudo ./setup-tpm-encryption.sh ubuntu
 # TPMとLUKSの状態を確認（ユーザー名を指定して実行）
 sudo ./check-tpm-status.sh ubuntu
 
-# Security Assessmentセクションで以下を確認:
-# - TPM2 protection enabled ✓
-# - Key slotsの状態を確認（一時パスワードがまだ存在することを確認）
+# 以下の情報を確認:
 
-# 注意: ユーザー名を指定しない場合、リカバリーキーは"Unknown"と表示されます
+# 1. TPM2 Configuration
+#    - TPM2 enrollment: Active ✓
+
+# 2. LUKS Key Slots
+#    - Slot 0: Temporary password (ubuntuKey) ⚠
+#    - Slot 1: Recovery key ✓  
+#    - Slot 2: Temporary password (ubuntuKey) ⚠
+
+# 3. Security Assessment > Quick Status
+#    - TPM2 enrollment: Active ✓
+#    - Recovery key: Configured ✓ （ユーザー名を指定した場合のみ表示）
+#    - Temporary password: Still active ⚠
+#    （画面をスクロールして他の項目も確認）
 ```
 
 #### 2.3 再起動してTPM2動作確認
@@ -89,12 +99,22 @@ sudo ./cleanup-duplicate-slots.sh ubuntu
 # 最終的な状態を確認（ユーザー名を指定）
 sudo ./check-tpm-status.sh ubuntu
 
-# Security Assessmentセクションで理想的な状態を確認:
-# - TPM2 protection enabled ✓
-# - No temporary passwords found ✓
+# 理想的な最終状態:
 
-# Security Assessmentセクションで:
-# - Overall Security Score: 5/5 - Excellent
+# 1. TPM2 Configuration
+#    - TPM2 enrollment: Active ✓
+
+# 2. LUKS Key Slots  
+#    - Total active slots: 1 or 2
+#    - Slot X: Recovery key ✓
+#    - 一時パスワード（ubuntuKey）のスロットがないこと
+
+# 3. Security Assessment
+#    - Quick Status:
+#      - TPM2 enrollment: Active ✓
+#      - Recovery key: Configured ✓ （ユーザー名を指定して実行した場合）
+#      - Temporary password: Removed ✓
+#    - Overall Security Score: 5/5 - Excellent
 ```
 
 ## 🔑 リカバリーキーについて
