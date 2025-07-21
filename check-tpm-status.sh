@@ -198,6 +198,8 @@ for LUKS_DEV in $LUKS_DEVICES; do
     fi
     
     # Check 2: Recovery key
+    # Debug: Show RECOVERY_SLOTS value
+    echo "[DEBUG] RECOVERY_SLOTS='$RECOVERY_SLOTS'" >&2
     if [ -n "$RECOVERY_SLOTS" ]; then
         echo -e "   - Recovery key: ${GREEN}Configured ✓${NC}"
     elif [ -n "$TARGET_USER" ] && [ -f "$RECOVERY_KEY" ]; then
