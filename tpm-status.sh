@@ -100,18 +100,26 @@ show_tpm_capabilities() {
     
     # PCR Banks
     print_info "Available PCR Banks:"
-    if tpm2_getcap pcrs 2>/dev/null | grep -E "^  (sha1|sha256|sha384|sha512):" | sort -u; then
-        :
+    if [[ $EUID -eq 0 ]] || groups 2>/dev/null | grep -qE "(tss|tpm)"; then
+        if tpm2_getcap pcrs 2>/dev/null | grep -E "^  (sha1|sha256|sha384|sha512):" | sort -u; then
+            :
+        else
+            print_warning "Failed to query PCR banks (may need root or tss group membership)"
+        fi
     else
-        print_error "Failed to query PCR banks"
+        print_info "Run with sudo to see PCR banks (requires elevated permissions)"
     fi
     
     # Algorithms
     print_info "Supported Algorithms:"
-    if tpm2_getcap algorithms 2>/dev/null | grep -E "^  (rsa|ecc|aes|sha)" | head -10; then
-        :
+    if [[ $EUID -eq 0 ]] || groups 2>/dev/null | grep -qE "(tss|tpm)"; then
+        if tpm2_getcap algorithms 2>/dev/null | grep -E "^  (rsa|ecc|aes|sha)" | head -10; then
+            :
+        else
+            print_warning "Failed to query algorithms (may need root or tss group membership)"
+        fi
     else
-        print_error "Failed to query algorithms"
+        print_info "Run with sudo to see algorithms (requires elevated permissions)"
     fi
 }
 

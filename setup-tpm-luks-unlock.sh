@@ -527,7 +527,8 @@ check_setup_state() {
     fi
     
     # Check required packages
-    local missing_packages=0
+    local missing_packages
+    missing_packages=0
     for pkg in clevis clevis-tpm2 clevis-luks tpm2-tools; do
         if ! dpkg -l | grep -q "^ii  $pkg "; then
             ((missing_packages++))

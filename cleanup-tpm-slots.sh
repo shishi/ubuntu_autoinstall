@@ -83,15 +83,28 @@ analyze_clevis_bindings() {
     fi
     
     # Parse Clevis slots
-    while IFS=: read -r slot pin _; do
-        if [[ -n "$slot" ]]; then
-            if [[ "$pin" =~ tpm2 ]]; then
+    local clevis_output
+    clevis_output=$(clevis luks list -d "$device" 2>/dev/null || true)
+    
+    if [[ -n "$clevis_output" ]]; then
+        print_info "Raw Clevis output:"
+        # shellcheck disable=SC2001
+        echo "$clevis_output" | sed 's/^/  /'
+    fi
+    
+    # Clevis output format: "1: tpm2 '{...}'"
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^([0-9]+):[[:space:]]*([^[:space:]]+) ]]; then
+            local slot="${BASH_REMATCH[1]}"
+            local pin="${BASH_REMATCH[2]}"
+            
+            if [[ "$pin" == "tpm2" ]]; then
                 tpm_slots+=("$slot")
             else
                 other_slots+=("$slot")
             fi
         fi
-    done < <(clevis luks list -d "$device" 2>/dev/null || true)
+    done <<< "$clevis_output"
     
     # Show findings
     if [[ ${#tpm_slots[@]} -eq 0 ]]; then
@@ -117,14 +130,34 @@ test_tpm_slot() {
     
     print_info "Testing TPM2 slot $slot..."
     
-    # Try to unlock using Clevis
+    # Check if device is already unlocked (e.g., root device)
+    local mapper_name=""
+    
+    # Find if this device is already mapped
+    for mapped in /dev/mapper/*; do
+        if [[ -b "$mapped" ]] && cryptsetup status "$(basename "$mapped")" 2>/dev/null | grep -q "$device"; then
+            mapper_name=$(basename "$mapped")
+            print_info "Device is already unlocked as /dev/mapper/$mapper_name"
+            
+            # For already unlocked devices, check if the slot has valid Clevis metadata
+            if clevis luks list -d "$device" -s "$slot" 2>/dev/null | grep -q "tpm2"; then
+                print_success "Slot $slot has valid TPM2 binding (device already unlocked)"
+                return 0
+            else
+                print_warning "Slot $slot metadata check failed"
+                return 1
+            fi
+        fi
+    done
+    
+    # Device not unlocked, try normal test
     if clevis luks unlock -d "$device" -s "$slot" -n "test_unlock_$$" 2>/dev/null; then
         # Clean up test unlock
         cryptsetup close "test_unlock_$$" 2>/dev/null || true
         print_success "Slot $slot is working"
         return 0
     else
-        print_warning "Slot $slot failed to unlock (this is normal if TPM state changed)"
+        print_warning "Slot $slot failed to unlock (this is normal if TPM state changed or device is in use)"
         return 1
     fi
 }

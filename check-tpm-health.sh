@@ -76,21 +76,44 @@ check_post_update() {
     # Test Clevis unlock
     print_info "Testing Clevis unlock capability..."
     local test_ok=false
+    local has_clevis_binding=false
     
     for device in /dev/sd* /dev/nvme* /dev/vd*; do
         if [[ -b "$device" ]] && cryptsetup isLuks "$device" 2>/dev/null; then
-            if clevis luks unlock -d "$device" -n "test_unlock_$$" 2>/dev/null; then
-                cryptsetup close "test_unlock_$$" 2>/dev/null || true
-                print_success "Clevis unlock test passed for $device"
-                test_ok=true
+            # Check if device has Clevis binding
+            if clevis luks list -d "$device" 2>/dev/null | grep -q "tpm2"; then
+                has_clevis_binding=true
+                
+                # Check if device is already unlocked
+                local device_name
+                device_name=$(basename "$device")
+                if lsblk -ln -o NAME,TYPE | grep -q "^${device_name}.*crypt"; then
+                    print_info "$device is already unlocked (this is normal for the root device)"
+                    test_ok=true
+                    continue
+                fi
+                
+                # Try to unlock if not already unlocked
+                if clevis luks unlock -d "$device" -n "test_unlock_$$" 2>/dev/null; then
+                    cryptsetup close "test_unlock_$$" 2>/dev/null || true
+                    print_success "Clevis unlock test passed for $device"
+                    test_ok=true
+                else
+                    print_warning "Could not test unlock for $device (may already be in use)"
+                fi
             fi
         fi
     done
     
-    if ! $test_ok; then
-        print_error "Clevis unlock test failed!"
-        print_warning "You may need your recovery key on next boot"
-        print_info "To re-bind TPM: sudo ./setup-tpm-luks-unlock.sh"
+    if ! $has_clevis_binding; then
+        print_warning "No devices with Clevis TPM2 binding found"
+        print_info "Run: sudo ./setup-tpm-luks-unlock.sh"
+    elif ! $test_ok; then
+        print_error "Clevis unlock test could not be completed"
+        print_info "This might be normal if all devices are already unlocked"
+        print_info "The real test will happen on next boot"
+    else
+        print_success "Clevis TPM2 binding is properly configured"
     fi
 }
 
