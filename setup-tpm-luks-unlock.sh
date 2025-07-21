@@ -352,7 +352,7 @@ manage_key_slots() {
         
         # Find an empty slot for new password
         local new_slot=""
-        for i in {1..7} {0}; do  # Try slots 1-7 first, then 0
+        for i in 1 2 3 4 5 6 7 0; do  # Try slots 1-7 first, then 0
             if ! cryptsetup luksDump "$LUKS_DEVICE" | grep -q "Key Slot $i: ENABLED"; then
                 new_slot=$i
                 break
@@ -385,7 +385,7 @@ manage_key_slots() {
     else
         # Find an empty slot for recovery key
         local recovery_slot=""
-        for i in {1..7} {0}; do  # Try slots 1-7 first, then 0
+        for i in 1 2 3 4 5 6 7 0; do  # Try slots 1-7 first, then 0
             if ! cryptsetup luksDump "$LUKS_DEVICE" | grep -q "Key Slot $i: ENABLED"; then
                 recovery_slot=$i
                 break
