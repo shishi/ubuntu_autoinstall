@@ -193,9 +193,18 @@ log "Recovery key generated at: $RECOVERY_KEY"
 # Step 4: Add recovery key to LUKS
 log "Checking if recovery key is already added to LUKS..."
 
-# Test if recovery key already works
-if cryptsetup luksOpen --test-passphrase "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
-    log "Recovery key is already added to LUKS device"
+# Check which slots contain the recovery key
+RECOVERY_SLOTS=""
+ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^[ 	]*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
+for slot in $ALL_SLOTS; do
+    if cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" < "$RECOVERY_KEY" 2>/dev/null; then
+        RECOVERY_SLOTS="$RECOVERY_SLOTS $slot"
+    fi
+done
+
+if [ -n "$RECOVERY_SLOTS" ]; then
+    log "Recovery key is already in slot(s):$RECOVERY_SLOTS"
+    log "Skipping recovery key addition to prevent duplicates"
 else
     log "Adding recovery key to LUKS device..."
     if echo "ubuntuKey" | cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY"; then
