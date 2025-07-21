@@ -264,26 +264,40 @@ if ! cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
     if echo "$LUKS_DUMP" | grep -q "^Tokens:"; then
         log "Tokens section found, checking for existing tokens..."
         
-        # Get token IDs more safely (using space/tab instead of \s for better compatibility)
-        TOKEN_IDS=$(echo "$LUKS_DUMP" | grep -E "^[ 	]*[0-9]+:" | grep -v "Keyslots:" | awk '{print $1}' | tr -d ':' | sort -n || true)
+        # Get all token info including type
+        TOKENS_INFO=$(echo "$LUKS_DUMP" | sed -n '/^Tokens:/,/^[A-Za-z]/p' | grep -E "^[ 	]*[0-9]+:" || true)
         
-        if [ -n "$TOKEN_IDS" ]; then
-            log "Found token IDs: $TOKEN_IDS"
-            for token_id in $TOKEN_IDS; do
-                log "Processing token $token_id..."
+        if [ -n "$TOKENS_INFO" ]; then
+            # Process each token
+            while IFS= read -r token_line; do
+                TOKEN_ID=$(echo "$token_line" | awk -F: '{print $1}' | tr -d ' ')
+                TOKEN_TYPE=$(echo "$token_line" | awk -F: '{print $2}' | tr -d ' ')
                 
-                # Remove any existing token that might interfere
-                warning "Attempting to remove token $token_id..."
-                if cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
-                    log "Removed token $token_id using recovery key"
-                elif echo "ubuntuKey" | cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" 2>/dev/null; then
-                    log "Removed token $token_id using temporary password"
+                log "Found token $TOKEN_ID of type: $TOKEN_TYPE"
+                
+                # Only try to remove non-systemd-tpm2 tokens
+                if [ "$TOKEN_TYPE" != "systemd-tpm2" ]; then
+                    warning "Attempting to remove $TOKEN_TYPE token $TOKEN_ID..."
+                    
+                    # pbkdf2 tokens often can't be removed with token remove command
+                    # They are tied to keyslots and will be removed when keyslots are removed
+                    if [ "$TOKEN_TYPE" = "pbkdf2" ]; then
+                        log "Note: pbkdf2 tokens are tied to keyslots and will be removed with them"
+                    else
+                        if cryptsetup token remove --token-id "$TOKEN_ID" "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+                            log "Removed token $TOKEN_ID using recovery key"
+                        elif echo "ubuntuKey" | cryptsetup token remove --token-id "$TOKEN_ID" "$LUKS_DEV" 2>/dev/null; then
+                            log "Removed token $TOKEN_ID using temporary password"
+                        else
+                            warning "Could not remove token $TOKEN_ID - may be tied to a keyslot"
+                        fi
+                    fi
                 else
-                    warning "Could not remove token $token_id - may not be problematic"
+                    log "Keeping systemd-tpm2 token $TOKEN_ID"
                 fi
-            done
+            done <<< "$TOKENS_INFO"
         else
-            log "No token IDs found"
+            log "No tokens found"
         fi
     else
         log "No Tokens section found in LUKS header"
@@ -389,15 +403,17 @@ UNKNOWN_SLOTS=""
 for slot in $ALL_SLOTS; do
     log "Testing slot $slot..."
     
+    # Use timeout to prevent hanging on corrupted slots
     # Test if it's the temporary password
-    if echo "ubuntuKey" | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" 2>/dev/null; then
+    if timeout 5 bash -c "echo 'ubuntuKey' | cryptsetup luksOpen --test-passphrase '$LUKS_DEV' --key-slot '$slot' 2>/dev/null"; then
         log "  Slot $slot: Contains temporary password (ubuntuKey)"
         TEMP_SLOTS="$TEMP_SLOTS $slot"
     # Test if it's the recovery key
-    elif cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" < "$RECOVERY_KEY" 2>/dev/null; then
+    elif [ -f "$RECOVERY_KEY" ] && timeout 5 bash -c "cryptsetup luksOpen --test-passphrase '$LUKS_DEV' --key-slot '$slot' < '$RECOVERY_KEY' 2>/dev/null"; then
         log "  Slot $slot: Contains recovery key"
         RECOVERY_SLOTS="$RECOVERY_SLOTS $slot"
     else
+        # Could be another password or corrupted
         log "  Slot $slot: Unknown key (possibly corrupted or another key)"
         UNKNOWN_SLOTS="$UNKNOWN_SLOTS $slot"
     fi
