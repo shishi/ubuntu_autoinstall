@@ -51,7 +51,6 @@ autoinstall:
         device: disk0
         size: 1G
         flag: boot
-        grub_device: true
         number: 1
         preserve: false
       
@@ -68,7 +67,6 @@ autoinstall:
         size: -1
         number: 3
         preserve: false
-        grub_device: true
       
       - type: dm_crypt
         id: dm-crypt-main
@@ -157,6 +155,11 @@ autoinstall:
     - curtin in-target -- apt-get update
     - curtin in-target -- apt-get upgrade -y
     - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll not available"'
+    
+    # Install Japanese language support and configure locale
+    - curtin in-target -- apt-get install -y language-pack-ja language-pack-gnome-ja
+    - curtin in-target -- locale-gen ja_JP.UTF-8
+    - curtin in-target -- update-locale LANG=ja_JP.UTF-8
     
     # Create organized directory structure for TPM state
     - |
@@ -361,14 +364,14 @@ autoinstall:
           # Check for unbound slots (TPM slots)
           if ! echo "$SLOTS" | grep -q "unbound"; then
             if [ "$HAS_TPM_TOKEN" = false ]; then
-              echo "  ⚠ No TPM-bound slots found (no 'unbound' slots)"
+              echo "  [WARN] No TPM-bound slots found (no 'unbound' slots)"
             fi
           fi
           
           # Count active slots
           SLOT_COUNT=$(echo "$SLOTS" | wc -l)
           if [ "$SLOT_COUNT" -gt 2 ] && [ "$HAS_TPM_TOKEN" = false ]; then
-            echo "  ⚠ Multiple password slots active - temporary password may still be present"
+            echo "  [WARN] Multiple password slots active - temporary password may still be present"
             PROBLEMS=$((PROBLEMS + 1))
           fi
         else
@@ -383,7 +386,7 @@ autoinstall:
         if [ -n "$TOKENS" ]; then
           echo "$TOKENS"
         else
-          echo "  ✗ No tokens found"
+          echo "  [FAIL] No tokens found"
         fi
       else
         echo "[FAIL] No LUKS device found"
@@ -454,7 +457,7 @@ autoinstall:
       if [ -f "$STATE_DIR/failed" ] && [ ! -f "$STATE_DIR/enrolled" ]; then
         echo
         echo "============================================================"
-        echo "⚠️  SECURITY WARNING: TPM ENROLLMENT FAILED!"
+        echo "***  SECURITY WARNING: TPM ENROLLMENT FAILED! ***"
         echo "============================================================"
         echo "Your disk encryption is using a weak temporary password: ubuntuKey"
         echo
@@ -471,10 +474,8 @@ autoinstall:
         if [ -n "$DISPLAY" ] && command -v notify-send >/dev/null 2>&1; then
           # Critical notification that persists
           notify-send -u critical -t 0 \
-            "⚠️ Security Alert: TPM Enrollment Failed" \
-            "Your disk encryption is using a weak temporary password (ubuntuKey)!\n\nRun: sudo tpm-enroll\n\nClick here for details." \
-            --action="open-terminal=Open Terminal" \
-            --action="view-help=View Help" 2>/dev/null || true
+            "Security Alert: TPM Enrollment Failed" \
+            "Your disk encryption is using a weak temporary password!\n\nRun: sudo tpm-enroll" 2>/dev/null || true
           
           # Also try zenity for a more prominent warning if available
           if command -v zenity >/dev/null 2>&1; then
@@ -488,8 +489,8 @@ autoinstall:
         # For Wayland sessions
         if [ -n "$WAYLAND_DISPLAY" ] && command -v notify-send >/dev/null 2>&1; then
           notify-send -u critical -t 0 \
-            "⚠️ Security Alert: TPM Enrollment Failed" \
-            "Your disk encryption is using a weak temporary password (ubuntuKey)!\n\nRun: sudo tpm-enroll" 2>/dev/null || true
+            "Security Alert: TPM Enrollment Failed" \
+            "Your disk encryption is using a weak temporary password!\n\nRun: sudo tpm-enroll" 2>/dev/null || true
         fi
       fi
       EOF
