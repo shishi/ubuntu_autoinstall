@@ -147,7 +147,8 @@ if [ -f "$RECOVERY_KEY" ]; then
             backup_file="$RECOVERY_KEY.backup.$(date +%Y%m%d_%H%M%S)"
             log "Backing up existing key to $backup_file"
             cp "$RECOVERY_KEY" "$backup_file"
-            openssl rand -base64 48 > "$RECOVERY_KEY"
+            # Generate recovery key without trailing newline
+            openssl rand -base64 48 | tr -d '\n' > "$RECOVERY_KEY"
             chmod 600 "$RECOVERY_KEY"
             log "Generated new recovery key"
             ;;
@@ -161,7 +162,8 @@ if [ -f "$RECOVERY_KEY" ]; then
             ;;
     esac
 else
-    openssl rand -base64 48 > "$RECOVERY_KEY"
+    # Generate recovery key without trailing newline
+    openssl rand -base64 48 | tr -d '\n' > "$RECOVERY_KEY"
     chmod 600 "$RECOVERY_KEY"
     log "Generated new recovery key"
 fi
@@ -207,12 +209,27 @@ if [ -n "$RECOVERY_SLOTS" ]; then
     log "Skipping recovery key addition to prevent duplicates"
 else
     log "Adding recovery key to LUKS device..."
-    if echo "ubuntuKey" | cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY"; then
-        log "Recovery key added successfully"
+    # Method 1: Try with stdin redirection
+    if echo -n "ubuntuKey" | cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY" 2>/dev/null; then
+        log "Recovery key added successfully (method 1)"
+    # Method 2: Try with --key-file for password
+    elif cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY" --key-file=<(echo -n "ubuntuKey") 2>/dev/null; then
+        log "Recovery key added successfully (method 2)"
+    # Method 3: Create temporary file for password
     else
-        error "Failed to add recovery key!"
-        error "Make sure the temporary password 'ubuntuKey' is still valid"
-        exit 1
+        TEMP_PASS=$(mktemp)
+        echo -n "ubuntuKey" > "$TEMP_PASS"
+        if cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY" --key-file="$TEMP_PASS" 2>&1 | tee /tmp/luks-add.log | grep -q "success"; then
+            log "Recovery key added successfully (method 3)"
+            rm -f "$TEMP_PASS"
+        else
+            rm -f "$TEMP_PASS"
+            error "Failed to add recovery key!"
+            error "Error details:"
+            cat /tmp/luks-add.log
+            error "Make sure the temporary password 'ubuntuKey' is still valid"
+            exit 1
+        fi
     fi
 fi
 
