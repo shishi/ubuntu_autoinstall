@@ -223,6 +223,21 @@ setup_new_credentials() {
             echo
             echo "Recovery Key: $RECOVERY_KEY"
             echo
+            
+            # Optionally clean up old recovery key files
+            if [[ ${#existing_keys[@]} -gt 3 ]]; then
+                print_warning "Found more than 3 recovery key files."
+                read -p "Keep only the 3 most recent files? (y/N): " cleanup_old
+                if [[ "$cleanup_old" =~ ^[Yy]$ ]]; then
+                    # Keep the 3 most recent files
+                    for i in "${!existing_keys[@]}"; do
+                        if [[ $i -ge 3 ]]; then
+                            rm -f "${existing_keys[$i]}"
+                            print_info "Removed old recovery key file: ${existing_keys[$i]}"
+                        fi
+                    done
+                fi
+            fi
         fi
     else
         # Generate recovery key
