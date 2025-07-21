@@ -8,6 +8,9 @@
 
 set -euo pipefail
 
+# Error trap for debugging
+trap 'echo "Error occurred at line $LINENO. Exit code: $?"; exit 1' ERR
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -239,37 +242,66 @@ if ! cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
     cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -A5 "^Tokens:" | head -10 || log "No tokens section found"
     
     # Clean up any corrupted tokens first
-    log "Checking for corrupted tokens..."
-    TOKEN_IDS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+:\s*systemd-tpm2" | cut -d: -f1 | tr -d ' ')
+    log "Checking for any existing tokens..."
     
-    if [ -n "$TOKEN_IDS" ]; then
-        log "Found existing TPM2 tokens: $TOKEN_IDS"
-        for token_id in $TOKEN_IDS; do
-            warning "Found existing token $token_id, attempting to remove..."
-            # Try to remove with recovery key first
-            if cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
-                log "Removed token $token_id using recovery key"
-            elif echo "ubuntuKey" | cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" 2>/dev/null; then
-                log "Removed token $token_id using temporary password"
-            else
-                warning "Could not remove token $token_id"
-            fi
-        done
+    # Safer approach: get full dump first
+    LUKS_DUMP=$(cryptsetup luksDump "$LUKS_DEV" 2>&1) || {
+        error "Failed to dump LUKS header"
+        echo "$LUKS_DUMP"
+        exit 1
+    }
+    
+    # Check if Tokens section exists
+    if echo "$LUKS_DUMP" | grep -q "^Tokens:"; then
+        log "Tokens section found, checking for existing tokens..."
+        
+        # Get token IDs more safely (using space/tab instead of \s for better compatibility)
+        TOKEN_IDS=$(echo "$LUKS_DUMP" | grep -E "^[ 	]*[0-9]+:" | grep -v "Keyslots:" | awk '{print $1}' | tr -d ':' | sort -n || true)
+        
+        if [ -n "$TOKEN_IDS" ]; then
+            log "Found token IDs: $TOKEN_IDS"
+            for token_id in $TOKEN_IDS; do
+                log "Processing token $token_id..."
+                
+                # Remove any existing token that might interfere
+                warning "Attempting to remove token $token_id..."
+                if cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+                    log "Removed token $token_id using recovery key"
+                elif echo "ubuntuKey" | cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" 2>/dev/null; then
+                    log "Removed token $token_id using temporary password"
+                else
+                    warning "Could not remove token $token_id - may not be problematic"
+                fi
+            done
+        else
+            log "No token IDs found"
+        fi
     else
-        log "No existing TPM2 tokens found"
+        log "No Tokens section found in LUKS header"
     fi
     
     # Try enrolling TPM2 with explicit password options
-    log "Enrolling TPM2 (this may take a moment)..."
+    log "Starting TPM2 enrollment process..."
+    
+    # Debug: Check if we can access the device
+    log "Verifying device access..."
+    if ! [ -b "$LUKS_DEV" ]; then
+        error "Device $LUKS_DEV is not a block device"
+        exit 1
+    fi
     
     # Create temporary file with password for non-interactive use
     TEMP_PASS_FILE=$(mktemp)
     chmod 600 "$TEMP_PASS_FILE"
+    echo "ubuntuKey" > "$TEMP_PASS_FILE"
+    log "Created temporary password file: $TEMP_PASS_FILE"
     
     # First attempt: using temporary password file
-    echo "ubuntuKey" > "$TEMP_PASS_FILE"
     log "Attempting TPM2 enrollment with temporary password file..."
-    if systemd-cryptenroll --unlock-key-file="$TEMP_PASS_FILE" --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" >/tmp/tpm-enroll.log 2>&1; then
+    log "Running: systemd-cryptenroll --unlock-key-file=$TEMP_PASS_FILE --tpm2-device=auto --tpm2-pcrs=0+7 $LUKS_DEV"
+    
+    # Run with timeout to prevent hanging
+    if timeout 30 systemd-cryptenroll --unlock-key-file="$TEMP_PASS_FILE" --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" >/tmp/tpm-enroll.log 2>&1; then
         log "TPM2 enrolled successfully using temporary password file"
         rm -f "$TEMP_PASS_FILE"
     else
@@ -278,7 +310,9 @@ if ! cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
         
         # Second attempt: using recovery key as unlock file
         log "Attempting TPM2 enrollment with recovery key file..."
-        if systemd-cryptenroll --unlock-key-file="$RECOVERY_KEY" --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" >/tmp/tpm-enroll.log 2>&1; then
+        log "Running: systemd-cryptenroll --unlock-key-file=$RECOVERY_KEY --tpm2-device=auto --tpm2-pcrs=0+7 $LUKS_DEV"
+        
+        if timeout 30 systemd-cryptenroll --unlock-key-file="$RECOVERY_KEY" --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" >/tmp/tpm-enroll.log 2>&1; then
             log "TPM2 enrolled successfully using recovery key file"
             rm -f "$TEMP_PASS_FILE"
         else
@@ -333,8 +367,8 @@ update-initramfs -u -k all
 # Step 8: Remove temporary password
 log "Removing temporary password (ubuntuKey)..."
 
-# Get all key slots
-ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
+# Get all key slots (using space/tab instead of \s for better compatibility)
+ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^[ 	]*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
 
 # Find slots with temporary password
 TEMP_SLOTS=""
@@ -407,7 +441,7 @@ fi
 # Show key slots
 echo
 echo "Key slots:"
-cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+: luks2"
+cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^[ 	]*[0-9]+: luks2"
 
 echo
 echo "=== Setup Complete ==="
