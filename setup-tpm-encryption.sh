@@ -230,13 +230,27 @@ fi
 # Check again if we need to enroll
 if ! cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
     log "Enrolling TPM2 for LUKS device..."
+    
+    # Clean up any corrupted tokens first
+    log "Checking for corrupted tokens..."
+    TOKEN_IDS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+:\s*systemd-tpm2" | cut -d: -f1 | tr -d ' ')
+    for token_id in $TOKEN_IDS; do
+        if cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" < "$RECOVERY_KEY" 2>&1 | grep -q "Wrong medium type"; then
+            warning "Removing corrupted token $token_id"
+            # Force remove with temporary password if recovery key fails
+            echo "ubuntuKey" | cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" 2>/dev/null || true
+        fi
+    done
+    
     # Try with recovery key first, then temporary password
-    if systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+    if systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" < "$RECOVERY_KEY" 2>&1 | tee /tmp/tpm-enroll.log | grep -q "successfully"; then
         log "TPM2 enrolled successfully using recovery key"
-    elif echo "ubuntuKey" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" 2>/dev/null; then
+    elif echo "ubuntuKey" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" 2>&1 | tee /tmp/tpm-enroll.log | grep -q "successfully"; then
         log "TPM2 enrolled successfully using temporary password"
     else
         error "Failed to enroll TPM2!"
+        echo "Error details:"
+        cat /tmp/tpm-enroll.log
         echo "The recovery key has been added, but TPM enrollment failed."
         echo "You can try again later with: sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 $LUKS_DEV < $RECOVERY_KEY"
         exit 1
@@ -255,11 +269,14 @@ fi
 # Check if entry exists
 if grep -q "dm_crypt-main" /etc/crypttab 2>/dev/null; then
     # Update existing entry
+    # Note: tpm2-device=auto may show warnings but is the correct syntax for systemd >= 248
     sed -i.bak "/dm_crypt-main/c\dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto" /etc/crypttab
 else
     # Add new entry
     echo "dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto" >> /etc/crypttab
 fi
+
+warning "Note: You may see 'ignoring unknown option tpm2-device' warnings. This is normal and can be ignored."
 
 log "Updated /etc/crypttab"
 
@@ -314,6 +331,11 @@ fi
 log "Verifying setup..."
 echo
 echo "=== Current LUKS Configuration ==="
+
+# Show LUKS tokens
+echo
+echo "LUKS Tokens:"
+cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -A20 "^Tokens:" || echo "No token section found"
 
 # Check TPM token
 if cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
