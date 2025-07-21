@@ -5,6 +5,7 @@
 #
 # Usage: sudo ./check-tpm-status.sh [username]
 #
+# Version: 2.1
 
 set -euo pipefail
 
@@ -67,6 +68,7 @@ fi
 echo
 echo -e "${MAGENTA}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${MAGENTA}            TPM2 & LUKS Encryption Status Report${NC}"
+echo -e "${MAGENTA}                          Version 2.1${NC}"
 echo -e "${MAGENTA}═══════════════════════════════════════════════════════════════${NC}"
 echo
 
