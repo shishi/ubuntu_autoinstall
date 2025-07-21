@@ -84,22 +84,29 @@ check_post_update() {
             if clevis luks list -d "$device" 2>/dev/null | grep -q "tpm2"; then
                 has_clevis_binding=true
                 
-                # Check if device is already unlocked
+                # Check if device is already unlocked (typical for single-drive systems)
                 local device_name
                 device_name=$(basename "$device")
                 if lsblk -ln -o NAME,TYPE | grep -q "^${device_name}.*crypt"; then
-                    print_info "$device is already unlocked (this is normal for the root device)"
-                    test_ok=true
+                    print_info "$device is already unlocked (this is your root device)"
+                    
+                    # For unlocked devices, verify the binding is valid
+                    if clevis luks list -d "$device" -s 1 2>&1 | grep -qE "(tpm2|^1:)"; then
+                        print_success "TPM2 binding appears valid"
+                        test_ok=true
+                    else
+                        print_warning "TPM2 binding metadata may be corrupted"
+                    fi
                     continue
                 fi
                 
-                # Try to unlock if not already unlocked
+                # Only try unlock test for additional drives (not common in desktop systems)
                 if clevis luks unlock -d "$device" -n "test_unlock_$$" 2>/dev/null; then
                     cryptsetup close "test_unlock_$$" 2>/dev/null || true
-                    print_success "Clevis unlock test passed for $device"
+                    print_success "Clevis unlock test passed for additional drive $device"
                     test_ok=true
                 else
-                    print_warning "Could not test unlock for $device (may already be in use)"
+                    print_info "Could not test unlock for $device (normal for single-drive systems)"
                 fi
             fi
         fi

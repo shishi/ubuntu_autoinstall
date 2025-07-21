@@ -74,23 +74,15 @@ analyze_clevis_bindings() {
     local -a tpm_slots=()
     local -a other_slots=()
     
-    print_info "Analyzing Clevis bindings on $device..."
-    
     # Get Clevis bindings
     if ! command_exists clevis; then
-        print_error "Clevis not installed"
+        print_error "Clevis not installed" >&2
         return 1
     fi
     
     # Parse Clevis slots
     local clevis_output
     clevis_output=$(clevis luks list -d "$device" 2>/dev/null || true)
-    
-    if [[ -n "$clevis_output" ]]; then
-        print_info "Raw Clevis output:"
-        # shellcheck disable=SC2001
-        echo "$clevis_output" | sed 's/^/  /'
-    fi
     
     # Clevis output format: "1: tpm2 '{...}'"
     while IFS= read -r line; do
@@ -106,20 +98,20 @@ analyze_clevis_bindings() {
         fi
     done <<< "$clevis_output"
     
-    # Show findings
+    # Show findings to stderr so they don't affect the return value
     if [[ ${#tpm_slots[@]} -eq 0 ]]; then
-        print_info "No TPM2 Clevis bindings found"
+        print_info "No TPM2 Clevis bindings found" >&2
     elif [[ ${#tpm_slots[@]} -eq 1 ]]; then
-        print_success "Found 1 TPM2 binding in slot ${tpm_slots[0]}"
+        print_success "Found 1 TPM2 binding in slot ${tpm_slots[0]}" >&2
     else
-        print_warning "Found ${#tpm_slots[@]} TPM2 bindings in slots: ${tpm_slots[*]}"
+        print_warning "Found ${#tpm_slots[@]} TPM2 bindings in slots: ${tpm_slots[*]}" >&2
     fi
     
     if [[ ${#other_slots[@]} -gt 0 ]]; then
-        print_info "Found non-TPM Clevis bindings in slots: ${other_slots[*]}"
+        print_info "Found non-TPM Clevis bindings in slots: ${other_slots[*]}" >&2
     fi
     
-    # Return TPM slots as a string
+    # Return ONLY TPM slots as a string to stdout
     echo "${tpm_slots[*]}"
 }
 
@@ -140,7 +132,7 @@ test_tpm_slot() {
             print_info "Device is already unlocked as /dev/mapper/$mapper_name"
             
             # For already unlocked devices, check if the slot has valid Clevis metadata
-            if clevis luks list -d "$device" -s "$slot" 2>/dev/null | grep -q "tpm2"; then
+            if clevis luks list -d "$device" 2>/dev/null | grep -q "^${slot}:.*tpm2"; then
                 print_success "Slot $slot has valid TPM2 binding (device already unlocked)"
                 return 0
             else
@@ -204,10 +196,13 @@ cleanup_device() {
     print_info "Total enabled key slots: ${#all_slots[@]} (${all_slots[*]})"
     
     # Get TPM slots from Clevis
+    print_info "Analyzing Clevis bindings on $device..."
     local tpm_slots_str
     tpm_slots_str=$(analyze_clevis_bindings "$device")
-    local -a tpm_slots
-    IFS=' ' read -r -a tpm_slots <<< "$tpm_slots_str"
+    local -a tpm_slots=()
+    if [[ -n "$tpm_slots_str" ]]; then
+        IFS=' ' read -r -a tpm_slots <<< "$tpm_slots_str"
+    fi
     
     if [[ ${#tpm_slots[@]} -le 1 ]]; then
         print_success "No duplicate TPM slots to clean up"
