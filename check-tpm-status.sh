@@ -184,10 +184,39 @@ for LUKS_DEV in $LUKS_DEVICES; do
     SECURITY_SCORE=0
     MAX_SCORE=5
     
+    # Summary at the top for quick view
+    echo -e "   Quick Status:"
+    
     # Check 1: TPM2 enrollment
     if cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
-        echo -e "   ${GREEN}$CHECK_MARK${NC} TPM2 protection enabled"
+        echo -e "   - TPM2 enrollment: ${GREEN}Active ✓${NC}"
         ((SECURITY_SCORE++))
+    else
+        echo -e "   - TPM2 enrollment: ${RED}Not configured ✗${NC}"
+    fi
+    
+    # Check 2: Recovery key
+    if [ -n "$RECOVERY_SLOTS" ]; then
+        echo -e "   - Recovery key: ${GREEN}Configured ✓${NC}"
+    elif [ -n "$TARGET_USER" ] && [ -f "$RECOVERY_KEY" ]; then
+        echo -e "   - Recovery key: ${YELLOW}Present (not verified) ⚠${NC}"
+    else
+        echo -e "   - Recovery key: ${YELLOW}Unknown ⚠${NC}"
+    fi
+    
+    # Check 3: Temporary password
+    if [ -n "$TEMP_SLOTS" ]; then
+        echo -e "   - Temporary password: ${YELLOW}Still active ⚠${NC}"
+    else
+        echo -e "   - Temporary password: ${GREEN}Removed ✓${NC}"
+    fi
+    
+    echo
+    echo "   Detailed Checks:"
+    
+    # Detailed Check 1: TPM2 enrollment
+    if cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
+        echo -e "   ${GREEN}$CHECK_MARK${NC} TPM2 protection enabled"
     else
         echo -e "   ${RED}$CROSS_MARK${NC} No TPM2 protection"
     fi
@@ -196,6 +225,8 @@ for LUKS_DEV in $LUKS_DEVICES; do
     if [ -n "$RECOVERY_SLOTS" ]; then
         echo -e "   ${GREEN}$CHECK_MARK${NC} Recovery key configured"
         ((SECURITY_SCORE++))
+    elif [ -n "$TARGET_USER" ] && [ -f "$RECOVERY_KEY" ]; then
+        echo -e "   ${YELLOW}$WARNING_MARK${NC} Recovery key exists but not verified (run with username to verify)"
     else
         echo -e "   ${YELLOW}$WARNING_MARK${NC} Recovery key status unknown"
     fi
@@ -205,7 +236,7 @@ for LUKS_DEV in $LUKS_DEVICES; do
         echo -e "   ${GREEN}$CHECK_MARK${NC} No temporary passwords found"
         ((SECURITY_SCORE++))
     else
-        echo -e "   ${RED}$CROSS_MARK${NC} Temporary password still active (security risk)"
+        echo -e "   ${YELLOW}$WARNING_MARK${NC} Temporary password still active"
     fi
     
     # Check 4: LUKS2 version
