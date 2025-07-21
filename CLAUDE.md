@@ -26,20 +26,25 @@ source:
 ### 3. Package Installation Issues
 
 #### systemd-cryptenroll Problem
-- **Issue**: `systemd-cryptenroll` package fails during installation with error code 100
-- **Root Cause**: Ubuntu 22.04 installation ISO contains systemd without TPM2 support compiled in
-- **Solution**: Install via late-commands after system update
+- **Issue**: `systemd-cryptenroll` package fails during installation with "unable to locate package" error
+- **Root Cause**: In Ubuntu 24.04, systemd-cryptenroll is NOT a separate package - it's bundled with systemd
+- **Solution**: Remove systemd-cryptenroll from packages list - it's already included
 
 ```yaml
 # DON'T do this:
 packages:
-  - systemd-cryptenroll  # Will fail!
+  - systemd-cryptenroll  # Will fail! Not a separate package in 24.04
 
 # DO this instead:
+# Simply ensure TPM2 tools are installed if needed:
+packages:
+  - tpm2-tools
+  - libtss2-dev
+  # systemd-cryptenroll is already included in systemd package
+
+# To verify it's available after installation:
 late-commands:
-  - curtin in-target -- apt-get update
-  - curtin in-target -- apt-get upgrade -y
-  - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll installation failed, continuing without TPM2 enrollment support"'
+  - curtin in-target -- which systemd-cryptenroll
 ```
 
 ### 4. Late-Commands Syntax Rules
@@ -142,7 +147,7 @@ autoinstall:
   late-commands:
     - curtin in-target -- apt-get update
     - curtin in-target -- apt-get upgrade -y
-    - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: continuing without TPM2 support"'
+    # systemd-cryptenroll is already included in systemd, no need to install it
   identity:
     hostname: ubuntu-server
     username: ubuntu

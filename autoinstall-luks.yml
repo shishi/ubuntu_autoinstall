@@ -1,27 +1,42 @@
 #cloud-config
 autoinstall:
   version: 1
-  # Step 6: Adding interactive-sections
   interactive-sections:
     - identity
+    - network
+  identity:
+    hostname: ubuntu-desktop
+    username: ubuntu
+    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
   locale: en_US.UTF-8
   keyboard:
     layout: us
-  source:
-    id: ubuntu-desktop
-    search_drivers: true
   network:
     version: 2
     ethernets:
-      any:
+      any-eth:
         match:
           name: "en*"
         dhcp4: true
         dhcp6: true
-  # Step 7: Complex storage configuration - LVM only first
+        optional: true
+    wifis:
+      any-wifi:
+        match:
+          name: "wl*"
+        dhcp4: true
+        dhcp6: true
+        optional: true
+  ssh:
+    install-server: true
+    allow-pw: true
+  source:
+    id: ubuntu-desktop
+    search_drivers: true
+  shutdown: reboot
+
   storage:
     config:
-      # Disk selection
       - type: disk
         id: disk0
         match:
@@ -29,9 +44,8 @@ autoinstall:
         ptable: gpt
         wipe: superblock-recursive
         preserve: false
-        grub_device: true
+        grub_device: false
       
-      # EFI partition
       - type: partition
         id: partition-efi
         device: disk0
@@ -39,8 +53,8 @@ autoinstall:
         flag: boot
         number: 1
         preserve: false
+        grub_device: true
       
-      # Boot partition
       - type: partition
         id: partition-boot
         device: disk0
@@ -48,7 +62,6 @@ autoinstall:
         number: 2
         preserve: false
       
-      # Main partition for LVM
       - type: partition
         id: partition-main
         device: disk0
@@ -56,35 +69,38 @@ autoinstall:
         number: 3
         preserve: false
       
-      # LVM setup
+      - type: dm_crypt
+        id: dm-crypt-main
+        dm_name: dm_crypt-main  # Explicitly set the mapper name
+        volume: partition-main
+        key: "ubuntuKey"
+        preserve: false
+      
       - type: lvm_volgroup
         id: vg0
         name: ubuntu-vg
         devices:
-          - partition-main
+          - dm-crypt-main
         preserve: false
       
-      # Root volume
-      - type: lvm_partition
-        id: lv-root
-        volgroup: vg0
-        name: root
-        size: 90%
-        preserve: false
-      
-      # Swap volume
       - type: lvm_partition
         id: lv-swap
         volgroup: vg0
         name: swap
-        size: 10%
+        size: 8G
         preserve: false
       
-      # Filesystems
+      - type: lvm_partition
+        id: lv-root
+        volgroup: vg0
+        name: root
+        size: -1
+        preserve: false
+      
       - type: format
         id: fs-efi
         volume: partition-efi
-        fstype: fat32
+        fstype: vfat
         preserve: false
       
       - type: format
@@ -105,7 +121,6 @@ autoinstall:
         fstype: swap
         preserve: false
       
-      # Mount points
       - type: mount
         id: mount-root
         device: fs-root
@@ -125,14 +140,7 @@ autoinstall:
         id: mount-swap
         device: fs-swap
         path: none
+  
   packages:
-    - git
-    - build-essential
-    - curl
-  identity:
-    hostname: ubuntu-server
-    username: ubuntu
-    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
-  ssh:
-    install-server: true
-    allow-pw: true
+    - cryptsetup-initramfs
+    - cryptsetup-bin

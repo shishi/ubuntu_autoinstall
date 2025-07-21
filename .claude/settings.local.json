@@ -12,7 +12,10 @@
       "Bash(else echo \"pre-install-check.sh not found\")",
       "Bash(fi)",
       "Bash(./bash_syntax_check.sh)",
-      "Bash(./check_embedded_scripts.sh:*)"
+      "Bash(./check_embedded_scripts.sh:*)",
+      "Bash(apt-cache:*)",
+      "Bash(systemctl:*)",
+      "WebFetch(domain:bugs.launchpad.net)"
     ],
     "deny": []
   }
