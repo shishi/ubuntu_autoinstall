@@ -243,9 +243,6 @@ autoinstall:
       chmod 644 /etc/profile.d/tpm-check.sh
       '
     
-    # Try enrollment during installation
-    - 'curtin in-target -- /usr/local/bin/tpm-enroll || true'
-    
     # Service for boot-time enrollment
     - |
       curtin in-target -- bash -c '
