@@ -79,6 +79,11 @@ fi
 
 log "Starting TPM-based LUKS encryption setup"
 
+# Quick status check
+log "Checking current setup status..."
+SETUP_COMPLETE=true
+STATUS_MESSAGE=""
+
 # Step 1: Find LUKS device
 log "Finding LUKS encrypted device..."
 LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -1)
@@ -118,9 +123,44 @@ RECOVERY_DIR="$USER_HOME/LUKS-Recovery"
 
 mkdir -p "$RECOVERY_DIR"
 RECOVERY_KEY="$RECOVERY_DIR/recovery-key.txt"
-openssl rand -base64 48 > "$RECOVERY_KEY"
+
+# Check if recovery key already exists
+if [ -f "$RECOVERY_KEY" ]; then
+    warning "Recovery key already exists at $RECOVERY_KEY"
+    echo "Do you want to:"
+    echo "  1) Use existing recovery key"
+    echo "  2) Generate new recovery key (old key will be backed up)"
+    echo "  3) Exit"
+    read -p "Choose [1-3]: " choice
+    
+    case $choice in
+        1)
+            log "Using existing recovery key"
+            ;;
+        2)
+            backup_file="$RECOVERY_KEY.backup.$(date +%Y%m%d_%H%M%S)"
+            log "Backing up existing key to $backup_file"
+            cp "$RECOVERY_KEY" "$backup_file"
+            openssl rand -base64 48 > "$RECOVERY_KEY"
+            chmod 600 "$RECOVERY_KEY"
+            log "Generated new recovery key"
+            ;;
+        3)
+            log "Exiting as requested"
+            exit 0
+            ;;
+        *)
+            error "Invalid choice"
+            exit 1
+            ;;
+    esac
+else
+    openssl rand -base64 48 > "$RECOVERY_KEY"
+    chmod 600 "$RECOVERY_KEY"
+    log "Generated new recovery key"
+fi
+
 chmod 700 "$RECOVERY_DIR"
-chmod 600 "$RECOVERY_KEY"
 
 cat > "$RECOVERY_DIR/README.txt" << 'EOF'
 LUKS Recovery Key
@@ -145,23 +185,62 @@ chown -R "$TARGET_USER:$TARGET_USER" "$RECOVERY_DIR"
 log "Recovery key generated at: $RECOVERY_KEY"
 
 # Step 4: Add recovery key to LUKS
-log "Adding recovery key to LUKS device..."
-if echo "ubuntuKey" | cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY"; then
-    log "Recovery key added successfully"
+log "Checking if recovery key is already added to LUKS..."
+
+# Test if recovery key already works
+if cryptsetup luksOpen --test-passphrase "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+    log "Recovery key is already added to LUKS device"
 else
-    error "Failed to add recovery key!"
-    exit 1
+    log "Adding recovery key to LUKS device..."
+    if echo "ubuntuKey" | cryptsetup luksAddKey "$LUKS_DEV" "$RECOVERY_KEY"; then
+        log "Recovery key added successfully"
+    else
+        error "Failed to add recovery key!"
+        error "Make sure the temporary password 'ubuntuKey' is still valid"
+        exit 1
+    fi
 fi
 
 # Step 5: Enroll TPM
-log "Enrolling TPM2 for LUKS device..."
-if systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV"; then
-    log "TPM2 enrolled successfully"
-else
-    error "Failed to enroll TPM2!"
-    echo "The recovery key has been added, but TPM enrollment failed."
-    echo "You can try again later with: sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 $LUKS_DEV"
-    exit 1
+log "Checking TPM2 enrollment status..."
+
+# Check if TPM2 is already enrolled
+if cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
+    log "TPM2 is already enrolled for this device"
+    echo "Do you want to re-enroll TPM2? (y/N): "
+    read -r response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        log "Re-enrolling TPM2..."
+        # Try with recovery key first
+        if systemd-cryptenroll --wipe-slot=tpm2 "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+            log "Removed existing TPM2 enrollment"
+        else
+            # Try with temporary password
+            if echo "ubuntuKey" | systemd-cryptenroll --wipe-slot=tpm2 "$LUKS_DEV" 2>/dev/null; then
+                log "Removed existing TPM2 enrollment"
+            else
+                warning "Could not remove existing TPM2 enrollment, continuing anyway"
+            fi
+        fi
+    else
+        log "Keeping existing TPM2 enrollment"
+    fi
+fi
+
+# Check again if we need to enroll
+if ! cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
+    log "Enrolling TPM2 for LUKS device..."
+    # Try with recovery key first, then temporary password
+    if systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+        log "TPM2 enrolled successfully using recovery key"
+    elif echo "ubuntuKey" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" 2>/dev/null; then
+        log "TPM2 enrolled successfully using temporary password"
+    else
+        error "Failed to enroll TPM2!"
+        echo "The recovery key has been added, but TPM enrollment failed."
+        echo "You can try again later with: sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 $LUKS_DEV < $RECOVERY_KEY"
+        exit 1
+    fi
 fi
 
 # Step 6: Update crypttab for TPM
@@ -176,10 +255,10 @@ fi
 # Check if entry exists
 if grep -q "dm_crypt-main" /etc/crypttab 2>/dev/null; then
     # Update existing entry
-    sed -i.bak "/dm_crypt-main/c\dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto,tpm2-pcrs=0+7" /etc/crypttab
+    sed -i.bak "/dm_crypt-main/c\dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto" /etc/crypttab
 else
     # Add new entry
-    echo "dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto,tpm2-pcrs=0+7" >> /etc/crypttab
+    echo "dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto" >> /etc/crypttab
 fi
 
 log "Updated /etc/crypttab"
@@ -191,24 +270,44 @@ update-initramfs -u -k all
 # Step 8: Remove temporary password
 log "Removing temporary password (ubuntuKey)..."
 
-# Find all slots containing the temporary password
-TEMP_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" | grep -E "^[[:space:]]*[0-9]+: luks2" | cut -d: -f1 | while read slot; do
+# Get all key slots
+ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
+
+# Find slots with temporary password
+TEMP_SLOTS=""
+for slot in $ALL_SLOTS; do
     if echo "ubuntuKey" | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" 2>/dev/null; then
-        echo "$slot"
+        TEMP_SLOTS="$TEMP_SLOTS $slot"
     fi
-done)
+done
 
 if [ -z "$TEMP_SLOTS" ]; then
     warning "No slots found with temporary password"
 else
-    for slot in $TEMP_SLOTS; do
-        log "Removing temporary password from slot $slot"
-        if echo "ubuntuKey" | cryptsetup luksKillSlot "$LUKS_DEV" "$slot"; then
-            log "Successfully removed slot $slot"
-        else
-            error "Failed to remove slot $slot"
-        fi
-    done
+    # Count total slots before removal
+    TOTAL_SLOTS=$(echo "$ALL_SLOTS" | wc -w)
+    TEMP_SLOT_COUNT=$(echo "$TEMP_SLOTS" | wc -w)
+    
+    if [ "$TOTAL_SLOTS" -le "$TEMP_SLOT_COUNT" ]; then
+        error "Cannot remove all key slots! At least one must remain."
+        echo "Total slots: $TOTAL_SLOTS, Temporary password slots: $TEMP_SLOT_COUNT"
+        echo "Make sure the recovery key or TPM is properly enrolled before removing the temporary password."
+    else
+        for slot in $TEMP_SLOTS; do
+            log "Removing temporary password from slot $slot"
+            # Use the recovery key to authenticate the removal
+            if cryptsetup luksKillSlot "$LUKS_DEV" "$slot" < "$RECOVERY_KEY" 2>/dev/null; then
+                log "Successfully removed slot $slot"
+            else
+                # If that fails, try with the temporary password itself
+                if echo "ubuntuKey" | cryptsetup luksKillSlot "$LUKS_DEV" "$slot" 2>/dev/null; then
+                    log "Successfully removed slot $slot (using temporary password)"
+                else
+                    error "Failed to remove slot $slot"
+                fi
+            fi
+        done
+    fi
 fi
 
 # Step 9: Verify setup
