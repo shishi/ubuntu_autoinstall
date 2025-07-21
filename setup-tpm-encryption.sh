@@ -116,6 +116,9 @@ fi
 
 log "TPM2 device is available"
 
+# Disable systemd password agents to prevent interactive prompts
+export SYSTEMD_ASK_PASSWORD_AGENT=/bin/false
+
 # Step 3: Generate recovery key
 log "Generating recovery key for user: $TARGET_USER"
 log "Using home directory: $USER_HOME"
@@ -235,19 +238,45 @@ if ! cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
     log "Checking for corrupted tokens..."
     TOKEN_IDS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+:\s*systemd-tpm2" | cut -d: -f1 | tr -d ' ')
     for token_id in $TOKEN_IDS; do
-        if cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" < "$RECOVERY_KEY" 2>&1 | grep -q "Wrong medium type"; then
-            warning "Removing corrupted token $token_id"
-            # Force remove with temporary password if recovery key fails
-            echo "ubuntuKey" | cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" 2>/dev/null || true
+        warning "Found existing token $token_id, attempting to remove..."
+        # Try to remove with recovery key first
+        if cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" < "$RECOVERY_KEY" 2>/dev/null; then
+            log "Removed token $token_id using recovery key"
+        elif echo "ubuntuKey" | cryptsetup token remove --token-id "$token_id" "$LUKS_DEV" 2>/dev/null; then
+            log "Removed token $token_id using temporary password"
+        else
+            warning "Could not remove token $token_id"
         fi
     done
     
-    # Try with recovery key first, then temporary password
-    if systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" < "$RECOVERY_KEY" 2>&1 | tee /tmp/tpm-enroll.log | grep -q "successfully"; then
-        log "TPM2 enrolled successfully using recovery key"
-    elif echo "ubuntuKey" | systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" 2>&1 | tee /tmp/tpm-enroll.log | grep -q "successfully"; then
-        log "TPM2 enrolled successfully using temporary password"
+    # Try enrolling TPM2 with explicit password options
+    log "Enrolling TPM2 (this may take a moment)..."
+    
+    # Create temporary file with password for non-interactive use
+    TEMP_PASS_FILE=$(mktemp)
+    chmod 600 "$TEMP_PASS_FILE"
+    
+    # First attempt: using temporary password file
+    echo "ubuntuKey" > "$TEMP_PASS_FILE"
+    if systemd-cryptenroll --unlock-key-file="$TEMP_PASS_FILE" --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" >/tmp/tpm-enroll.log 2>&1; then
+        log "TPM2 enrolled successfully using temporary password file"
+        rm -f "$TEMP_PASS_FILE"
+    # Second attempt: using recovery key as unlock file
+    elif systemd-cryptenroll --unlock-key-file="$RECOVERY_KEY" --tpm2-device=auto --tpm2-pcrs=0+7 "$LUKS_DEV" >/tmp/tpm-enroll.log 2>&1; then
+        log "TPM2 enrolled successfully using recovery key file"
+        rm -f "$TEMP_PASS_FILE"
+    # Third attempt: using expect if available
+    elif command -v expect >/dev/null 2>&1; then
+        rm -f "$TEMP_PASS_FILE"
+        log "Trying with expect for automated password entry..."
+        expect -c "
+            set timeout 30
+            spawn systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 $LUKS_DEV
+            expect \"Please enter current passphrase\" { send \"ubuntuKey\r\" }
+            expect eof
+        " >/tmp/tpm-enroll.log 2>&1 && log "TPM2 enrolled successfully using expect"
     else
+        rm -f "$TEMP_PASS_FILE"
         error "Failed to enroll TPM2!"
         echo "Error details:"
         cat /tmp/tpm-enroll.log
@@ -382,3 +411,4 @@ echo "Recovery key location: $RECOVERY_DIR"
 echo "Owner: $TARGET_USER"
 
 log "TPM encryption setup completed successfully!"
+
