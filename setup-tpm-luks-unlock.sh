@@ -56,8 +56,8 @@ check_tpm2() {
     print_info "Checking TPM2 availability..."
     
     if ! command_exists tpm2_getcap; then
-        print_error "tpm2-tools not installed. Please install required packages first."
-        return 1
+        print_warning "tpm2-tools not installed. Will be installed during setup."
+        return 2  # Special return code for "tools missing but can be installed"
     fi
     
     if ! tpm2_getcap properties-fixed 2>/dev/null | grep -q "TPM2_PT_FAMILY_INDICATOR"; then
@@ -67,6 +67,26 @@ check_tpm2() {
     
     print_success "TPM2 device is available"
     return 0
+}
+
+# Function to check TPM2 hardware only
+check_tpm2_hardware() {
+    print_info "Checking TPM2 hardware availability..."
+    
+    # Check if TPM device exists
+    if [[ -e /dev/tpm0 ]] || [[ -e /dev/tpmrm0 ]]; then
+        print_success "TPM device found"
+        return 0
+    fi
+    
+    # Check if TPM is visible in sysfs
+    if [[ -d /sys/class/tpm/tpm0 ]]; then
+        print_success "TPM device found in sysfs"
+        return 0
+    fi
+    
+    print_error "No TPM2 hardware device found"
+    return 1
 }
 
 # Function to install required packages
@@ -551,13 +571,30 @@ main() {
         exit 0
     fi
     
-    # Step 1: Check TPM2
-    if ! check_tpm2; then
+    # Step 1: Check TPM2 hardware (not tools)
+    if ! check_tpm2_hardware; then
+        print_error "TPM2 hardware is required for this setup"
         exit 1
     fi
     
     # Step 2: Find LUKS device
     if ! find_luks_device; then
+        exit 1
+    fi
+    
+    # Step 3: Install packages first (before checking TPM2 tools)
+    install_packages
+    
+    # Step 4: Now check TPM2 with tools
+    local tpm_check_result
+    check_tpm2
+    tpm_check_result=$?
+    
+    if [[ $tpm_check_result -eq 1 ]]; then
+        print_error "TPM2 device not accessible even after installing tools"
+        exit 1
+    elif [[ $tpm_check_result -eq 2 ]]; then
+        print_error "This should not happen - tools should be installed by now"
         exit 1
     fi
     
@@ -570,23 +607,20 @@ main() {
         fi
     fi
     
-    # Step 3: Install packages
-    install_packages
-    
-    # Step 4: Setup new credentials
+    # Step 5: Setup new credentials
     setup_new_credentials
     
-    # Step 5: Bind to TPM2
+    # Step 6: Bind to TPM2
     if ! bind_tpm2; then
         exit 1
     fi
     
-    # Step 6: Manage key slots
+    # Step 7: Manage key slots
     if ! manage_key_slots; then
         exit 1
     fi
     
-    # Step 7: Verify setup
+    # Step 8: Verify setup
     verify_setup
     
     echo
