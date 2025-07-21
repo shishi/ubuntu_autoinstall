@@ -8,7 +8,7 @@ autoinstall:
     hostname: ubuntu-desktop
     username: ubuntu
     password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
-  locale: ja_JP.UTF-8
+  locale: en_US.UTF-8
   keyboard:
     layout: us
   network:
