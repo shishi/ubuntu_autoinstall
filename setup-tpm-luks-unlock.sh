@@ -352,7 +352,7 @@ manage_key_slots() {
         
         # Find an empty slot for new password
         local new_slot=""
-        for i in {0..7}; do
+        for i in {1..7} {0}; do  # Try slots 1-7 first, then 0
             if ! cryptsetup luksDump "$LUKS_DEVICE" | grep -q "Key Slot $i: ENABLED"; then
                 new_slot=$i
                 break
@@ -366,8 +366,17 @@ manage_key_slots() {
         
         # Add new password
         print_info "Adding new password to slot $new_slot..."
-        echo -n "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$new_slot" <(echo -n "$NEW_PASSWORD")
-        print_success "New password added to slot $new_slot"
+        if echo -n "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$new_slot" <(echo -n "$NEW_PASSWORD"); then
+            print_success "New password added to slot $new_slot"
+        else
+            print_warning "Failed to add to slot $new_slot, trying without specific slot..."
+            if echo -n "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(echo -n "$NEW_PASSWORD"); then
+                print_success "New password added to an available slot"
+            else
+                print_error "Failed to add new password"
+                return 1
+            fi
+        fi
     fi
     
     # Check if recovery key already exists
@@ -376,7 +385,7 @@ manage_key_slots() {
     else
         # Find an empty slot for recovery key
         local recovery_slot=""
-        for i in {0..7}; do
+        for i in {1..7} {0}; do  # Try slots 1-7 first, then 0
             if ! cryptsetup luksDump "$LUKS_DEVICE" | grep -q "Key Slot $i: ENABLED"; then
                 recovery_slot=$i
                 break
@@ -388,12 +397,21 @@ manage_key_slots() {
         else
             print_info "Adding recovery key to slot $recovery_slot..."
             # Use the appropriate password for adding the key
-            if [[ "$new_password_exists" == "true" ]]; then
-                echo -n "$NEW_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$recovery_slot" <(echo -n "$RECOVERY_KEY")
-            else
-                echo -n "$NEW_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$recovery_slot" <(echo -n "$RECOVERY_KEY")
+            local auth_password="$NEW_PASSWORD"
+            if [[ "$new_password_exists" == "true" ]] || [[ -z "$NEW_PASSWORD" ]]; then
+                auth_password="$CURRENT_PASSWORD"
             fi
-            print_success "Recovery key added to slot $recovery_slot"
+            
+            if echo -n "$auth_password" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$recovery_slot" <(echo -n "$RECOVERY_KEY"); then
+                print_success "Recovery key added to slot $recovery_slot"
+            else
+                print_warning "Failed to add to slot $recovery_slot, trying without specific slot..."
+                if echo -n "$auth_password" | cryptsetup luksAddKey "$LUKS_DEVICE" <(echo -n "$RECOVERY_KEY"); then
+                    print_success "Recovery key added to an available slot"
+                else
+                    print_warning "Failed to add recovery key - you may need to add it manually later"
+                fi
+            fi
         fi
     fi
     
