@@ -369,42 +369,79 @@ log "Removing temporary password (ubuntuKey)..."
 
 # Get all key slots (using space/tab instead of \s for better compatibility)
 ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^[ 	]*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
+log "All key slots: $ALL_SLOTS"
 
-# Find slots with temporary password
+# First, let's identify what each slot contains
+log "Identifying key slot contents..."
 TEMP_SLOTS=""
+RECOVERY_SLOTS=""
+UNKNOWN_SLOTS=""
+
 for slot in $ALL_SLOTS; do
+    log "Testing slot $slot..."
+    
+    # Test if it's the temporary password
     if echo "ubuntuKey" | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" 2>/dev/null; then
+        log "  Slot $slot: Contains temporary password (ubuntuKey)"
         TEMP_SLOTS="$TEMP_SLOTS $slot"
+    # Test if it's the recovery key
+    elif cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" < "$RECOVERY_KEY" 2>/dev/null; then
+        log "  Slot $slot: Contains recovery key"
+        RECOVERY_SLOTS="$RECOVERY_SLOTS $slot"
+    else
+        log "  Slot $slot: Unknown key (possibly corrupted or another key)"
+        UNKNOWN_SLOTS="$UNKNOWN_SLOTS $slot"
     fi
 done
 
+# Summary
+echo
+echo "Key slot analysis:"
+echo "  Temporary password slots: ${TEMP_SLOTS:-none}"
+echo "  Recovery key slots: ${RECOVERY_SLOTS:-none}"
+echo "  Unknown/other slots: ${UNKNOWN_SLOTS:-none}"
+echo
+
+# Check if we have a valid recovery key slot
+if [ -z "$RECOVERY_SLOTS" ]; then
+    error "No recovery key slot found! Cannot remove temporary password safely."
+    echo "Please ensure the recovery key is properly added before removing the temporary password."
+    exit 1
+fi
+
+# Now remove temporary password slots
 if [ -z "$TEMP_SLOTS" ]; then
     warning "No slots found with temporary password"
 else
-    # Count total slots before removal
-    TOTAL_SLOTS=$(echo "$ALL_SLOTS" | wc -w)
-    TEMP_SLOT_COUNT=$(echo "$TEMP_SLOTS" | wc -w)
+    log "Found temporary password in slots:$TEMP_SLOTS"
     
-    if [ "$TOTAL_SLOTS" -le "$TEMP_SLOT_COUNT" ]; then
-        error "Cannot remove all key slots! At least one must remain."
-        echo "Total slots: $TOTAL_SLOTS, Temporary password slots: $TEMP_SLOT_COUNT"
-        echo "Make sure the recovery key or TPM is properly enrolled before removing the temporary password."
-    else
-        for slot in $TEMP_SLOTS; do
-            log "Removing temporary password from slot $slot"
-            # Use the recovery key to authenticate the removal
-            if cryptsetup luksKillSlot "$LUKS_DEV" "$slot" < "$RECOVERY_KEY" 2>/dev/null; then
-                log "Successfully removed slot $slot"
-            else
-                # If that fails, try with the temporary password itself
-                if echo "ubuntuKey" | cryptsetup luksKillSlot "$LUKS_DEV" "$slot" 2>/dev/null; then
-                    log "Successfully removed slot $slot (using temporary password)"
-                else
-                    error "Failed to remove slot $slot"
-                fi
-            fi
-        done
-    fi
+    # Remove each temporary password slot
+    for slot in $TEMP_SLOTS; do
+        # Skip slot 0 initially if it's the only working slot
+        if [ "$slot" = "0" ] && [ "$(echo "$RECOVERY_SLOTS" | wc -w)" -eq 0 ]; then
+            warning "Skipping slot 0 as no other valid slots exist"
+            continue
+        fi
+        
+        log "Removing temporary password from slot $slot..."
+        
+        # Method 1: Use recovery key to authorize removal
+        if cryptsetup luksKillSlot "$LUKS_DEV" "$slot" < "$RECOVERY_KEY" 2>&1 | tee /tmp/kill-slot.log | grep -q "successfully"; then
+            log "Successfully removed slot $slot using recovery key"
+        # Method 2: Use temporary password to authorize its own removal
+        elif echo "ubuntuKey" | cryptsetup luksKillSlot "$LUKS_DEV" "$slot" 2>&1 | tee /tmp/kill-slot.log | grep -q "successfully"; then
+            log "Successfully removed slot $slot using temporary password"
+        # Method 3: If slot 0 is stubborn, try a different approach
+        elif [ "$slot" = "0" ]; then
+            warning "Slot 0 is difficult to remove. This is a known issue with some LUKS configurations."
+            echo "You may need to manually remove it later with:"
+            echo "  sudo cryptsetup luksKillSlot $LUKS_DEV 0"
+            echo "Enter the recovery key when prompted."
+        else
+            error "Failed to remove slot $slot"
+            cat /tmp/kill-slot.log
+        fi
+    done
 fi
 
 # Step 9: Verify setup
