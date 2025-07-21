@@ -194,7 +194,7 @@ autoinstall:
       chmod 700 "$USER_HOME/LUKS-Recovery"
       chmod 600 "$USER_HOME/LUKS-Recovery/recovery-key.txt"
       
-      cat > "$USER_HOME/LUKS-Recovery/README.txt" << EOF
+      cat > "$USER_HOME/LUKS-Recovery/README.txt" << "READMEEOF"
       LUKS Recovery Key
       =================
       
@@ -207,7 +207,7 @@ autoinstall:
       
       If TPM enrollment fails, see:
       https://github.com/shishi/ubuntu_autoinstall#tpm-enrollment-failed
-      EOF
+      READMEEOF
       
       [ -n "$FIRST_USER" ] && chown -R "$FIRST_USER:$FIRST_USER" "$USER_HOME/LUKS-Recovery"
       
@@ -296,12 +296,6 @@ autoinstall:
       STATE_DIR="/var/lib/tpm-luks"
       LOG_DIR="/var/log/tpm-luks"
       
-      # Colors for output
-      RED='\033[0;31m'
-      GREEN='\033[0;32m'
-      YELLOW='\033[0;33m'
-      NC='\033[0m' # No Color
-      
       echo "=== TPM Enrollment Status ==="
       echo "Date: $(date)"
       echo
@@ -311,16 +305,16 @@ autoinstall:
       
       # Check state files
       if [ -f "$STATE_DIR/enrolled" ]; then
-        echo -e "${GREEN}✓${NC} Enrollment marker exists"
+        echo "[OK] Enrollment marker exists"
         echo "  Enrolled: $(cat "$STATE_DIR/enrolled-date" 2>/dev/null || echo "unknown date")"
       else
-        echo -e "${RED}✗${NC} Not enrolled"
-        ((PROBLEMS++))
+        echo "[FAIL] Not enrolled"
+        PROBLEMS=$((PROBLEMS + 1))
       fi
       
       if [ -f "$STATE_DIR/failed" ]; then
-        echo -e "${YELLOW}⚠${NC} Last failure: $(cat "$STATE_DIR/failed")"
-        ((PROBLEMS++))
+        echo "[WARN] Last failure: $(cat "$STATE_DIR/failed")"
+        PROBLEMS=$((PROBLEMS + 1))
       fi
       
       # Check LUKS
@@ -332,11 +326,11 @@ autoinstall:
         # Check for TPM token
         HAS_TPM_TOKEN=false
         if cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
-          echo -e "${GREEN}✓${NC} TPM2 token present in LUKS header"
+          echo "[OK] TPM2 token present in LUKS header"
           HAS_TPM_TOKEN=true
         else
-          echo -e "${RED}✗${NC} No TPM2 token in LUKS header"
-          ((PROBLEMS++))
+          echo "[FAIL] No TPM2 token in LUKS header"
+          PROBLEMS=$((PROBLEMS + 1))
         fi
         
         echo
@@ -348,19 +342,19 @@ autoinstall:
           # Check for unbound slots (TPM slots)
           if ! echo "$SLOTS" | grep -q "unbound"; then
             if [ "$HAS_TPM_TOKEN" = false ]; then
-              echo -e "  ${YELLOW}⚠${NC} No TPM-bound slots found (no 'unbound' slots)"
+              echo "  ⚠ No TPM-bound slots found (no 'unbound' slots)"
             fi
           fi
           
           # Count active slots
           SLOT_COUNT=$(echo "$SLOTS" | wc -l)
           if [ "$SLOT_COUNT" -gt 2 ] && [ "$HAS_TPM_TOKEN" = false ]; then
-            echo -e "  ${YELLOW}⚠${NC} Multiple password slots active - temporary password may still be present"
-            ((PROBLEMS++))
+            echo "  ⚠ Multiple password slots active - temporary password may still be present"
+            PROBLEMS=$((PROBLEMS + 1))
           fi
         else
           echo "  Unable to read slots"
-          ((PROBLEMS++))
+          PROBLEMS=$((PROBLEMS + 1))
         fi
         
         # Check for tokens
@@ -370,32 +364,32 @@ autoinstall:
         if [ -n "$TOKENS" ]; then
           echo "$TOKENS"
         else
-          echo -e "  ${RED}✗${NC} No tokens found"
+          echo "  ✗ No tokens found"
         fi
       else
-        echo -e "${RED}✗${NC} No LUKS device found"
-        ((PROBLEMS++))
+        echo "[FAIL] No LUKS device found"
+        PROBLEMS=$((PROBLEMS + 1))
       fi
       
       # Check TPM device
       echo
       echo "TPM Device:"
       if [ -e /dev/tpm0 ] || [ -e /dev/tpmrm0 ]; then
-        echo -e "${GREEN}✓${NC} TPM device present"
+        echo "[OK] TPM device present"
         ls -la /dev/tpm* 2>/dev/null
       else
-        echo -e "${RED}✗${NC} No TPM device found"
-        ((PROBLEMS++))
+        echo "[FAIL] No TPM device found"
+        PROBLEMS=$((PROBLEMS + 1))
       fi
       
       # Check systemd-cryptenroll availability
       echo
       echo "TPM2 Support:"
       if systemd-cryptenroll --tpm2-device=list &>/dev/null; then
-        echo -e "${GREEN}✓${NC} systemd-cryptenroll TPM2 support available"
+        echo "[OK] systemd-cryptenroll TPM2 support available"
       else
-        echo -e "${RED}✗${NC} systemd-cryptenroll TPM2 support NOT available"
-        ((PROBLEMS++))
+        echo "[FAIL] systemd-cryptenroll TPM2 support NOT available"
+        PROBLEMS=$((PROBLEMS + 1))
       fi
       
       # Recent logs
@@ -409,13 +403,13 @@ autoinstall:
       echo
       echo "=== Summary ==="
       if [ "$PROBLEMS" -eq 0 ] && [ -f "$STATE_DIR/enrolled" ]; then
-        echo -e "${GREEN}✓${NC} TPM enrollment appears to be working correctly"
+        echo "[OK] TPM enrollment appears to be working correctly"
       else
-        echo -e "${RED}✗${NC} Found $PROBLEMS problem(s)"
+        echo "[FAIL] Found $PROBLEMS problem(s)"
         
         if [ ! -f "$STATE_DIR/enrolled" ] || [ "$HAS_TPM_TOKEN" = false ]; then
           echo
-          echo -e "${RED}SECURITY WARNING:${NC}"
+          echo "SECURITY WARNING:"
           echo "Your disk encryption is using a temporary password: ubuntuKey"
           echo
           echo "To fix this:"
