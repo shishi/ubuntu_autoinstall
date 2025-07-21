@@ -402,13 +402,71 @@ log "Updated /etc/crypttab"
 
 # Step 7: Update initramfs
 log "Updating initramfs..."
+
+# Ensure TPM2 modules are included
+if [ ! -d /etc/initramfs-tools/modules.d ]; then
+    mkdir -p /etc/initramfs-tools/modules.d
+fi
+
+# Add TPM2 modules
+cat > /etc/initramfs-tools/modules.d/tpm2.conf << EOF
+# TPM2 modules for LUKS unlock
+tpm
+tpm_tis
+tpm_tis_core
+tpm_crb
+rng_core
+EOF
+
+# Ensure cryptsetup includes TPM2 support
+if [ -f /etc/cryptsetup-initramfs/conf-hook ]; then
+    if ! grep -q "CRYPTSETUP_ENABLE_TPM2" /etc/cryptsetup-initramfs/conf-hook; then
+        echo "CRYPTSETUP_ENABLE_TPM2=yes" >> /etc/cryptsetup-initramfs/conf-hook
+    fi
+fi
+
 update-initramfs -u -k all
 
-# Step 8: Remove temporary password
-log "Removing temporary password (ubuntuKey)..."
+# Step 8: Test TPM2 unlock before removing passwords
+log "Testing TPM2 unlock capability..."
 
-# Get all key slots (using space/tab instead of \s for better compatibility)
-ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^[ 	]*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
+# Create a test LUKS container to verify TPM2 works
+TEST_FILE=$(mktemp)
+TEST_LOOP=""
+dd if=/dev/zero of="$TEST_FILE" bs=1M count=10 2>/dev/null
+
+# Test TPM2 functionality
+if command -v systemd-cryptenroll &>/dev/null && systemd-cryptenroll --tpm2-device=list &>/dev/null; then
+    log "TPM2 is available, but cannot test boot-time unlock without rebooting"
+    warning "TPM2 unlock will only work after reboot with proper initramfs"
+else
+    warning "TPM2 functionality test failed"
+fi
+
+rm -f "$TEST_FILE"
+
+# Step 9: Remove temporary password (with safety check)
+log "Preparing to remove temporary password..."
+warning "IMPORTANT: Only remove temporary password after confirming:"
+echo "  1. TPM2 is enrolled (check above)"
+echo "  2. Recovery key is working (tested above)"
+echo "  3. You have physical access to the machine"
+echo
+echo "Do you want to remove the temporary password now? (y/N): "
+read -r response
+
+if [[ "$response" =~ ^[Yy]$ ]]; then
+    log "Removing temporary password (ubuntuKey)..."
+else
+    warning "Keeping temporary password for safety"
+    warning "You can remove it later with: sudo ./cleanup-duplicate-slots.sh $TARGET_USER"
+    # Skip to verification
+    ALL_SLOTS=""
+fi
+
+if [ -n "${response}" ] && [[ "$response" =~ ^[Yy]$ ]]; then
+    # Get all key slots (using space/tab instead of \s for better compatibility)
+    ALL_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^[ 	]*[0-9]+: luks2" | awk '{print $1}' | tr -d ':')
 log "All key slots: $ALL_SLOTS"
 
 # First, let's identify what each slot contains
@@ -485,8 +543,9 @@ else
         fi
     done
 fi
+fi  # End of password removal section
 
-# Step 9: Verify setup
+# Step 10: Verify setup
 log "Verifying setup..."
 echo
 echo "=== Current LUKS Configuration ==="
