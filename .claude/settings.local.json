@@ -10,7 +10,9 @@
       "Bash(if [ -f \"./pre-install-check.sh\" ])",
       "Bash(then ./pre-install-check.sh autoinstall-step10-organized.yml)",
       "Bash(else echo \"pre-install-check.sh not found\")",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(./bash_syntax_check.sh)",
+      "Bash(./check_embedded_scripts.sh:*)"
     ],
     "deny": []
   }

@@ -183,8 +183,8 @@ autoinstall:
       
       # Fallback to searching for partition 3 if blkid fails
       if [ -z "$LUKS_DEV" ]; then
-        LUKS_DEV=$(lsblk -nlo NAME,TYPE | grep "part" | sed -n '3p' | awk '{print "/dev/"$1}')
-        # Verify it's actually LUKS
+        LUKS_DEV=$(lsblk -nlo NAME,TYPE | grep "part" | sed -n "3p" | awk "{print \"/dev/\"\$1}")
+        # Verify it is actually LUKS
         if [ -n "$LUKS_DEV" ] && ! cryptsetup isLuks "$LUKS_DEV" 2>/dev/null; then
           LUKS_DEV=""
         fi
@@ -307,7 +307,7 @@ autoinstall:
         log "Removing temporary password"
         
         # Find slots containing the temporary password
-        TEMP_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" | grep -E "^\s*[0-9]+: luks2" | cut -d: -f1 | while read slot; do
+        TEMP_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" | grep -E "^[[:space:]]*[0-9]+: luks2" | cut -d: -f1 | while read slot; do
           if echo "ubuntuKey" | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" 2>/dev/null; then
             echo "$slot"
           fi
@@ -573,8 +573,8 @@ autoinstall:
       
       # Fallback to searching for partition 3 if blkid fails
       if [ -z "$LUKS_DEV" ]; then
-        LUKS_DEV=$(lsblk -nlo NAME,TYPE | grep "part" | sed -n '3p' | awk '{print "/dev/"$1}')
-        # Verify it's actually LUKS
+        LUKS_DEV=$(lsblk -nlo NAME,TYPE | grep "part" | sed -n "3p" | awk "{print \"/dev/\"\$1}")
+        # Verify it is actually LUKS
         if [ -n "$LUKS_DEV" ] && ! cryptsetup isLuks "$LUKS_DEV" 2>/dev/null; then
           LUKS_DEV=""
         fi
