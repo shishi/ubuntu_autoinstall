@@ -67,6 +67,30 @@ interactive-sections:
   - identity  # Allows manual input during installation
 ```
 
+## Critical Development Rules
+
+### NEVER make changes without evidence:
+1. **ALWAYS research and provide evidence before making any configuration changes**
+2. **NEVER change settings multiple times without clear justification**
+3. **ALWAYS show the source of your information (documentation, official guides, etc.)**
+4. **If uncertain, ASK instead of guessing**
+5. **Time is valuable - avoid trial and error approaches**
+
+Examples of required evidence:
+- Official Ubuntu/Curtin documentation links
+- Error message analysis with clear cause-effect relationship
+- Tested configurations with proven results
+- Community consensus from reliable sources
+
+### Changes must include:
+```
+## Change Justification
+- **What**: Specific change being made
+- **Why**: Evidence-based reason for the change
+- **Source**: Documentation or error analysis supporting this change
+- **Expected Result**: What this change will fix/improve
+```
+
 ## Validation Requirements
 
 ### Always validate before installation:

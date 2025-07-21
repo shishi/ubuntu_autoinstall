@@ -44,7 +44,7 @@ autoinstall:
         ptable: gpt
         wipe: superblock-recursive
         preserve: false
-        grub_device: true
+        grub_device: false
       
       - type: partition
         id: partition-efi
@@ -53,6 +53,7 @@ autoinstall:
         flag: boot
         number: 1
         preserve: false
+        grub_device: true
       
       - type: partition
         id: partition-boot
@@ -99,7 +100,7 @@ autoinstall:
       - type: format
         id: fs-efi
         volume: partition-efi
-        fstype: fat32
+        fstype: vfat
         preserve: false
       
       - type: format
@@ -152,14 +153,19 @@ autoinstall:
     - xz-utils
   
   late-commands:
+    # Create directory structure first
+    - curtin in-target -- mkdir -p /var/lib/tpm-luks /var/log/tpm-luks
+    
     - curtin in-target -- apt-get update
     - curtin in-target -- apt-get upgrade -y
-    - 'curtin in-target -- bash -c "apt-get install -y systemd-cryptenroll || echo Warning: systemd-cryptenroll not available"'
-    
-    # Install Japanese language support and configure locale
-    - curtin in-target -- apt-get install -y language-pack-ja language-pack-gnome-ja
-    - curtin in-target -- locale-gen ja_JP.UTF-8
-    - curtin in-target -- update-locale LANG=ja_JP.UTF-8
+    - |
+      curtin in-target -- bash -c '
+      if ! apt-get install -y systemd-cryptenroll; then
+        echo "ERROR: systemd-cryptenroll installation failed" > /var/lib/tpm-luks/install-failed
+        echo "$(date): systemd-cryptenroll installation failed" >> /var/log/tpm-luks/install.log
+        # Continue installation but mark failure
+      fi
+      '
     
     # Create organized directory structure for TPM state
     - |
@@ -172,25 +178,39 @@ autoinstall:
       mkdir -p /var/lib/tpm-luks
       mkdir -p /var/log/tpm-luks
       
-      # Store LUKS device for consistent reference
-      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      # Find LUKS device using blkid (most reliable method based on cryptsetup documentation)
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -1)
+      
+      # Fallback to searching for partition 3 if blkid fails
+      if [ -z "$LUKS_DEV" ]; then
+        LUKS_DEV=$(lsblk -nlo NAME,TYPE | grep "part" | sed -n '3p' | awk '{print "/dev/"$1}')
+        # Verify it's actually LUKS
+        if [ -n "$LUKS_DEV" ] && ! cryptsetup isLuks "$LUKS_DEV" 2>/dev/null; then
+          LUKS_DEV=""
+        fi
+      fi
+      
       echo "$LUKS_DEV" > /var/lib/tpm-luks/device
       '
     
     # Generate recovery key
     - |
       curtin in-target -- bash -c '
-      # Find user home
-      FIRST_USER=""
-      for user in $(ls /home 2>/dev/null); do
-        if [ -d "/home/$user" ]; then
-          uid=$(id -u "$user" 2>/dev/null)
-          if [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ]; then
-            FIRST_USER="$user"
-            break
+      # Find user home - check passwd file for real users
+      FIRST_USER=$(grep -E "^[^:]+:[^:]+:(1[0-9]{3}|[2-9][0-9]{3}):" /etc/passwd | grep -v "nobody" | head -1 | cut -d: -f1)
+      
+      # Fallback to checking home directories
+      if [ -z "$FIRST_USER" ]; then
+        for user in $(ls /home 2>/dev/null); do
+          if [ -d "/home/$user" ]; then
+            uid=$(id -u "$user" 2>/dev/null)
+            if [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ]; then
+              FIRST_USER="$user"
+              break
+            fi
           fi
-        fi
-      done
+        done
+      fi
       
       USER_HOME="${FIRST_USER:+/home/$FIRST_USER}"
       USER_HOME="${USER_HOME:-/root}"
@@ -257,6 +277,13 @@ autoinstall:
         exit 0
       fi
       
+      # Check if systemd-cryptenroll was installed successfully
+      if [ -f /var/lib/tpm-luks/install-failed ]; then
+        log "ERROR: systemd-cryptenroll is not installed"
+        echo "$(date): systemd-cryptenroll not installed" > "$FAILED_MARKER"
+        exit 1
+      fi
+      
       # Check TPM availability
       if ! systemd-cryptenroll --tpm2-device=list &>/dev/null; then
         log "ERROR: TPM2 not available"
@@ -276,23 +303,36 @@ autoinstall:
         log "Updating initramfs"
         update-initramfs -u 2>&1 | tee -a "$LOG_FILE"
         
-        # Remove temporary password with better verification
+        # Remove temporary password using slot-specific method
         log "Removing temporary password"
         
-        # Try to remove from all possible slots
-        for attempt in 1 2 3; do
-          log "Removal attempt $attempt"
-          echo ubuntuKey | cryptsetup luksRemoveKey "$LUKS_DEV" 2>&1 | tee -a "$LOG_FILE" || true
-          
-          # Check if password still exists
-          if ! echo ubuntuKey | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" 2>/dev/null; then
-            log "Verified: Temporary password successfully removed on attempt $attempt"
-            break
-          else
-            log "WARNING: Temporary password still exists after attempt $attempt"
-            sleep 2
+        # Find slots containing the temporary password
+        TEMP_SLOTS=$(cryptsetup luksDump "$LUKS_DEV" | grep -E "^\s*[0-9]+: luks2" | cut -d: -f1 | while read slot; do
+          if echo "ubuntuKey" | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" --key-slot "$slot" 2>/dev/null; then
+            echo "$slot"
           fi
-        done
+        done)
+        
+        # Remove each slot containing the temporary password
+        if [ -n "$TEMP_SLOTS" ]; then
+          for slot in $TEMP_SLOTS; do
+            log "Removing temporary password from slot $slot"
+            if echo "ubuntuKey" | cryptsetup luksKillSlot "$LUKS_DEV" "$slot" 2>&1 | tee -a "$LOG_FILE"; then
+              log "Successfully removed slot $slot"
+            else
+              log "WARNING: Failed to remove slot $slot"
+            fi
+          done
+        else
+          log "No slots found with temporary password"
+        fi
+        
+        # Verify removal
+        if echo "ubuntuKey" | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" 2>/dev/null; then
+          log "ERROR: Temporary password still exists after removal attempts"
+        else
+          log "Verified: Temporary password successfully removed"
+        fi
         
         # Final verification
         if echo ubuntuKey | cryptsetup luksOpen --test-passphrase "$LUKS_DEV" 2>/dev/null; then
@@ -528,13 +568,34 @@ autoinstall:
     # Fix crypttab to use correct device mapping
     - |
       curtin in-target -- bash -c '
-      # Get the UUID of the LUKS device
-      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+      # Find LUKS device using blkid (most reliable method based on cryptsetup documentation)
+      LUKS_DEV=$(blkid -t TYPE="crypto_LUKS" -o device | head -1)
+      
+      # Fallback to searching for partition 3 if blkid fails
+      if [ -z "$LUKS_DEV" ]; then
+        LUKS_DEV=$(lsblk -nlo NAME,TYPE | grep "part" | sed -n '3p' | awk '{print "/dev/"$1}')
+        # Verify it's actually LUKS
+        if [ -n "$LUKS_DEV" ] && ! cryptsetup isLuks "$LUKS_DEV" 2>/dev/null; then
+          LUKS_DEV=""
+        fi
+      fi
+      
       LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEV")
       
-      # Create proper crypttab entry
-      echo "dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto,tpm2-pcrs=0+7" > /etc/crypttab
+      # Check if crypttab already exists and backup
+      [ -f /etc/crypttab ] && cp /etc/crypttab /etc/crypttab.backup
+      
+      # Append to existing crypttab instead of overwriting
+      if ! grep -q "dm_crypt-main" /etc/crypttab 2>/dev/null; then
+        echo "dm_crypt-main UUID=$LUKS_UUID none luks,discard,tpm2-device=auto,tpm2-pcrs=0+7" >> /etc/crypttab
+      fi
       
       # Update initramfs with correct crypttab
       update-initramfs -u -k all
       '
+
+    # Install Japanese language support and configure locale
+    - curtin in-target -- apt-get install -y language-pack-ja language-pack-gnome-ja
+    - curtin in-target -- locale-gen ja_JP.UTF-8
+    - curtin in-target -- update-locale LANG=ja_JP.UTF-8
+    
