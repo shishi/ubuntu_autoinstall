@@ -9,7 +9,7 @@ echo
 
 # Function to count recovery key files
 count_recovery_keys() {
-    ls /root/.luks-recovery-key-*.txt 2>/dev/null | wc -l
+    find /root -maxdepth 1 -name ".luks-recovery-key-*.txt" -type f 2>/dev/null | wc -l
 }
 
 # Function to count LUKS slots

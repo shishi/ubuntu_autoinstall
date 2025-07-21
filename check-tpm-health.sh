@@ -20,7 +20,8 @@ check_pre_update() {
     print_info "Pre-update TPM health check"
     
     # Save current PCR values
-    local pcr_file="$HOME/.tpm-pcr-backup-$(date +%Y%m%d-%H%M%S).txt"
+    local pcr_file
+    pcr_file="$HOME/.tpm-pcr-backup-$(date +%Y%m%d-%H%M%S).txt"
     
     if command -v tpm2_pcrread >/dev/null 2>&1; then
         tpm2_pcrread "sha256:0,1,4,7,14" > "$pcr_file" 2>/dev/null
@@ -52,12 +53,14 @@ check_post_update() {
     print_info "Post-update TPM health check"
     
     # Compare PCR values
-    local latest_backup=$(ls -t "$HOME"/.tpm-pcr-backup-*.txt 2>/dev/null | head -1)
+    local latest_backup
+    latest_backup=$(find "$HOME" -maxdepth 1 -name ".tpm-pcr-backup-*.txt" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
     
     if [[ -f "$latest_backup" ]]; then
         print_info "Comparing PCR values with: $latest_backup"
         
-        local current_pcr=$(mktemp)
+        local current_pcr
+        current_pcr=$(mktemp)
         if tpm2_pcrread "sha256:0,1,4,7,14" > "$current_pcr" 2>/dev/null; then
             if diff -q "$latest_backup" "$current_pcr" >/dev/null; then
                 print_success "PCR values unchanged - auto-unlock should work"

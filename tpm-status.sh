@@ -72,9 +72,9 @@ check_tpm_device() {
     # Check kernel modules
     print_info "TPM kernel modules:"
     if lsmod | grep -E "^tpm" > /tmp/tpm_modules.txt; then
-        cat /tmp/tpm_modules.txt | while read -r line; do
+        while read -r line; do
             echo "  • $line"
-        done
+        done < /tmp/tpm_modules.txt
         rm -f /tmp/tpm_modules.txt
     else
         print_warning "No TPM kernel modules loaded"
@@ -212,7 +212,7 @@ check_clevis_status() {
                 if bindings=$(clevis luks list -d "$device" 2>/dev/null); then
                     if [[ -n "$bindings" ]]; then
                         print_success "Found Clevis bindings on $device:"
-                        echo "$bindings" | sed 's/^/    /'
+                        echo "$bindings" | while IFS= read -r line; do echo "    $line"; done
                         found=1
                     fi
                 fi
@@ -245,13 +245,19 @@ show_luks_info() {
             echo "  Header Information:"
             cryptsetup luksDump "$device" 2>/dev/null | grep -E "^(Version|Cipher|UUID|Key Slot)" | sed 's/^/    /'
             
-            # Count enabled slots
-            local total_slots=$(cryptsetup luksDump "$device" 2>/dev/null | grep -c "Key Slot.*ENABLED" || echo 0)
+            # Count enabled slots - LUKS2 format
+            local total_slots
+            total_slots=$(cryptsetup luksDump "$device" 2>/dev/null | grep -E "^Keyslots:" -A 100 | grep -cE "^  [0-9]+: luks2" || echo 0)
+            if [[ $total_slots -eq 0 ]]; then
+                # Fallback for LUKS1 format
+                total_slots=$(cryptsetup luksDump "$device" 2>/dev/null | grep -c "Key Slot.*ENABLED" || echo 0)
+            fi
             echo "  Total enabled key slots: $total_slots"
             
             # Check for Clevis slots
             if command_exists clevis; then
-                local clevis_slots=$(clevis luks list -d "$device" 2>/dev/null | wc -l || echo 0)
+                local clevis_slots
+                clevis_slots=$(clevis luks list -d "$device" 2>/dev/null | wc -l || echo 0)
                 if [[ $clevis_slots -gt 0 ]]; then
                     echo "  Clevis-bound slots: $clevis_slots"
                 fi
@@ -278,7 +284,7 @@ check_tpm_resources() {
     print_info "Persistent handles in use:"
     if handles=$(tpm2_getcap handles-persistent 2>/dev/null); then
         if [[ -n "$handles" ]]; then
-            echo "$handles" | sed 's/^/  /'
+            echo "$handles" | while IFS= read -r line; do echo "  $line"; done
         else
             print_info "  No persistent handles in use"
         fi
@@ -288,7 +294,7 @@ check_tpm_resources() {
     print_info "NV indices in use:"
     if nvindices=$(tpm2_getcap handles-nv-index 2>/dev/null); then
         if [[ -n "$nvindices" ]]; then
-            echo "$nvindices" | sed 's/^/  /'
+            echo "$nvindices" | while IFS= read -r line; do echo "  $line"; done
         else
             print_info "  No NV indices in use"
         fi
@@ -301,7 +307,7 @@ show_boot_config() {
     
     # Kernel command line
     print_info "Current kernel command line:"
-    cat /proc/cmdline | fold -w 70 | sed 's/^/  /'
+    fold -w 70 < /proc/cmdline | while IFS= read -r line; do echo "  $line"; done
     
     # Check for rd.luks parameters
     if grep -q "rd.luks" /proc/cmdline; then

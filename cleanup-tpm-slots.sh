@@ -46,7 +46,7 @@ confirm_action() {
     local response
     
     echo -e "${YELLOW}$prompt${NC}"
-    read -p "Type 'yes' to continue, anything else to skip: " response
+    read -r -p "Type 'yes' to continue, anything else to skip: " response
     
     if [[ "$response" == "yes" ]]; then
         return 0
@@ -134,12 +134,25 @@ get_luks_slots_info() {
     local device="$1"
     local -a enabled_slots=()
     
-    # Get all enabled slots
-    for i in {0..31}; do
-        if cryptsetup luksDump "$device" 2>/dev/null | grep -q "Key Slot $i: ENABLED"; then
-            enabled_slots+=("$i")
-        fi
-    done
+    # Check LUKS version
+    local luks_version
+    luks_version=$(cryptsetup luksDump "$device" 2>/dev/null | grep "^Version:" | awk '{print $2}')
+    
+    if [[ "$luks_version" == "2" ]]; then
+        # LUKS2 format - parse JSON-like structure
+        while IFS=: read -r slot _; do
+            if [[ "$slot" =~ ^[[:space:]]*([0-9]+)$ ]]; then
+                enabled_slots+=("${BASH_REMATCH[1]}")
+            fi
+        done < <(cryptsetup luksDump "$device" 2>/dev/null | sed -n '/^Keyslots:/,/^[A-Z]/p' | grep -E "^[[:space:]]+[0-9]+: luks2")
+    else
+        # LUKS1 format - use old method
+        for i in {0..7}; do
+            if cryptsetup luksDump "$device" 2>/dev/null | grep -q "Key Slot $i: ENABLED"; then
+                enabled_slots+=("$i")
+            fi
+        done
+    fi
     
     echo "${enabled_slots[*]}"
 }
@@ -153,12 +166,15 @@ cleanup_device() {
     echo "----------------------------------------"
     
     # Get all slots
-    local all_slots=($(get_luks_slots_info "$device"))
+    local all_slots
+    mapfile -t all_slots < <(get_luks_slots_info "$device")
     print_info "Total enabled key slots: ${#all_slots[@]} (${all_slots[*]})"
     
     # Get TPM slots from Clevis
-    local tpm_slots_str=$(analyze_clevis_bindings "$device")
-    local -a tpm_slots=($tpm_slots_str)
+    local tpm_slots_str
+    tpm_slots_str=$(analyze_clevis_bindings "$device")
+    local -a tpm_slots
+    IFS=' ' read -r -a tpm_slots <<< "$tpm_slots_str"
     
     if [[ ${#tpm_slots[@]} -le 1 ]]; then
         print_success "No duplicate TPM slots to clean up"
@@ -253,7 +269,8 @@ cleanup_device() {
 # Function to cleanup all devices
 cleanup_all_devices() {
     local dry_run="${1:-false}"
-    local devices=($(find_luks_devices))
+    local devices
+    mapfile -t devices < <(find_luks_devices)
     
     if [[ ${#devices[@]} -eq 0 ]]; then
         print_warning "No LUKS devices found"
@@ -304,7 +321,7 @@ EOF
 main() {
     local dry_run=false
     local device=""
-    local all_devices=false
+    # local all_devices=false  # Reserved for future use
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -318,7 +335,7 @@ main() {
                 exit 0
                 ;;
             -a|--all)
-                all_devices=true
+                # all_devices=true  # Currently unused, keeping for future use
                 shift
                 ;;
             -*)

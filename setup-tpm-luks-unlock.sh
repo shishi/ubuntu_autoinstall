@@ -144,7 +144,7 @@ find_luks_device() {
         for i in "${!luks_devices[@]}"; do
             echo "  $((i+1)). ${luks_devices[$i]}"
         done
-        read -p "Select device (1-${#luks_devices[@]}): " selection
+        read -r -p "Select device (1-${#luks_devices[@]}): " selection
         LUKS_DEVICE="${luks_devices[$((selection-1))]}"
     fi
     
@@ -167,7 +167,8 @@ show_luks_slots() {
 check_clevis_binding() {
     if clevis luks list -d "$LUKS_DEVICE" 2>/dev/null | grep -q "tpm2"; then
         print_warning "Clevis TPM2 binding already exists on $LUKS_DEVICE"
-        local slots=$(clevis luks list -d "$LUKS_DEVICE" | grep "tpm2" | cut -d: -f1)
+        local slots
+        slots=$(clevis luks list -d "$LUKS_DEVICE" | grep "tpm2" | cut -d: -f1)
         print_info "TPM2 bound to slot(s): $slots"
         return 0
     else
@@ -181,7 +182,7 @@ setup_new_credentials() {
     
     # Check for existing recovery keys
     local existing_keys=()
-    if [[ -d /root ]] && ls /root/.luks-recovery-key-*.txt 2>/dev/null | grep -q .; then
+    if [[ -d /root ]] && find /root -maxdepth 1 -name ".luks-recovery-key-*.txt" -type f 2>/dev/null | grep -q .; then
         readarray -t existing_keys < <(ls -t /root/.luks-recovery-key-*.txt 2>/dev/null)
     fi
     
@@ -191,7 +192,7 @@ setup_new_credentials() {
             echo "  - $key (created: $(stat -c %y "$key" 2>/dev/null | awk '{print $1}'))"
         done
         
-        read -p "Use existing recovery key? (y/N): " use_existing
+        read -r -p "Use existing recovery key? (y/N): " use_existing
         if [[ "$use_existing" =~ ^[Yy]$ ]]; then
             RECOVERY_KEY_FILE="${existing_keys[0]}"
             # Extract recovery key from file
@@ -230,7 +231,7 @@ setup_new_credentials() {
             # Optionally clean up old recovery key files
             if [[ ${#existing_keys[@]} -gt 3 ]]; then
                 print_warning "Found more than 3 recovery key files."
-                read -p "Keep only the 3 most recent files? (y/N): " cleanup_old
+                read -r -p "Keep only the 3 most recent files? (y/N): " cleanup_old
                 if [[ "$cleanup_old" =~ ^[Yy]$ ]]; then
                     # Keep the 3 most recent files
                     for i in "${!existing_keys[@]}"; do
@@ -267,13 +268,13 @@ setup_new_credentials() {
     print_info "Checking if a user password is needed..."
     
     while $password_needed; do
-        read -s -p "Enter new LUKS password (or press Enter to skip if already set): " NEW_PASSWORD
+        read -r -s -p "Enter new LUKS password (or press Enter to skip if already set): " NEW_PASSWORD
         echo
         
         if [[ -z "$NEW_PASSWORD" ]]; then
             print_info "Skipping new password setup"
             # We'll need to get the existing password for operations
-            read -s -p "Enter existing LUKS password for operations: " NEW_PASSWORD
+            read -r -s -p "Enter existing LUKS password for operations: " NEW_PASSWORD
             echo
             if printf '%s' "$NEW_PASSWORD" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
                 print_success "Using existing password for operations"
@@ -282,7 +283,7 @@ setup_new_credentials() {
                 print_error "Invalid password"
             fi
         else
-            read -s -p "Confirm new LUKS password: " NEW_PASSWORD_CONFIRM
+            read -r -s -p "Confirm new LUKS password: " NEW_PASSWORD_CONFIRM
             echo
             
             if [[ "$NEW_PASSWORD" == "$NEW_PASSWORD_CONFIRM" ]]; then
@@ -305,14 +306,15 @@ bind_tpm2() {
     
     # Check if already bound
     if check_clevis_binding; then
-        read -p "TPM2 binding already exists. Replace it? (y/N): " response
+        read -r -p "TPM2 binding already exists. Replace it? (y/N): " response
         if [[ ! "$response" =~ ^[Yy]$ ]]; then
             print_info "Keeping existing TPM2 binding"
             return 0
         fi
         
         # Remove existing binding
-        local slots=$(clevis luks list -d "$LUKS_DEVICE" | grep "tpm2" | cut -d: -f1)
+        local slots
+        slots=$(clevis luks list -d "$LUKS_DEVICE" | grep "tpm2" | cut -d: -f1)
         for slot in $slots; do
             print_info "Removing existing TPM2 binding from slot $slot"
             clevis luks unbind -d "$LUKS_DEVICE" -s "$slot" -f
@@ -352,7 +354,7 @@ manage_key_slots() {
     
     # Get current password
     print_info "Enter current LUKS password to continue:"
-    read -s -p "Current password: " CURRENT_PASSWORD
+    read -r -s -p "Current password: " CURRENT_PASSWORD
     echo
     
     # Test current password
@@ -439,34 +441,72 @@ manage_key_slots() {
     
     # Ask about removing old password
     print_warning "The original installation password is still active"
-    read -p "Remove the original installation password? (y/N): " response
+    read -r -p "Remove the original installation password? (y/N): " response
     
     if [[ "$response" =~ ^[Yy]$ ]]; then
         # Find which slot has the installation password
         print_info "Identifying installation password slot..."
         
-        # We need to be careful here - only remove if we're sure
-        local slots_to_check=()
+        # First, try to identify by testing with the original password
+        local ubuntu_key_slot=""
+        read -r -s -p "Enter the original installation password (ubuntuKey) to identify its slot: " UBUNTU_KEY
+        echo
+        
+        # Test each slot with the provided password
         for i in {0..7}; do
             if cryptsetup luksDump "$LUKS_DEVICE" | grep -q "Key Slot $i: ENABLED"; then
-                if [[ "$i" != "$new_slot" ]] && [[ "$i" != "$recovery_slot" ]]; then
-                    # Skip Clevis slots
-                    if ! clevis luks list -d "$LUKS_DEVICE" 2>/dev/null | grep -q "^$i:"; then
-                        slots_to_check+=("$i")
-                    fi
+                if printf '%s' "$UBUNTU_KEY" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+                    ubuntu_key_slot="$i"
+                    print_success "Found installation password in slot $i"
+                    break
                 fi
             fi
         done
         
-        if [[ ${#slots_to_check[@]} -eq 1 ]]; then
-            local old_slot="${slots_to_check[0]}"
-            print_info "Removing old password from slot $old_slot..."
-            printf '%s' "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$old_slot"
-            print_success "Old password removed"
+        if [[ -n "$ubuntu_key_slot" ]]; then
+            # Double-check it's not a TPM or our new passwords
+            if ! clevis luks list -d "$LUKS_DEVICE" 2>/dev/null | grep -q "^$ubuntu_key_slot:"; then
+                if [[ "$ubuntu_key_slot" != "$new_slot" ]] && [[ "$ubuntu_key_slot" != "$recovery_slot" ]]; then
+                    print_info "Removing installation password from slot $ubuntu_key_slot..."
+                    if printf '%s' "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$ubuntu_key_slot"; then
+                        print_success "Installation password removed successfully"
+                    else
+                        print_error "Failed to remove installation password"
+                    fi
+                else
+                    print_warning "The provided password matches a newly created slot. Not removing."
+                fi
+            else
+                print_warning "The identified slot is used by TPM. Not removing."
+            fi
         else
-            print_warning "Could not automatically identify installation password slot"
-            print_info "Current non-Clevis slots: ${slots_to_check[*]}"
-            print_info "You can manually remove slots later using: cryptsetup luksKillSlot $LUKS_DEVICE <slot>"
+            print_warning "Could not identify installation password slot with the provided password"
+            
+            # Fallback to the original logic
+            local slots_to_check=()
+            for i in {0..7}; do
+                if cryptsetup luksDump "$LUKS_DEVICE" | grep -q "Key Slot $i: ENABLED"; then
+                    if [[ "$i" != "$new_slot" ]] && [[ "$i" != "$recovery_slot" ]]; then
+                        # Skip Clevis slots
+                        if ! clevis luks list -d "$LUKS_DEVICE" 2>/dev/null | grep -q "^$i:"; then
+                            slots_to_check+=("$i")
+                        fi
+                    fi
+                fi
+            done
+            
+            print_info "Current non-Clevis, non-new slots: ${slots_to_check[*]}"
+            print_info ""
+            print_info "Manual identification method (from README):"
+            print_info "1. Test each slot with the installation password:"
+            for slot in "${slots_to_check[@]}"; do
+                print_info "   echo -n \"your-ubuntu-key\" | sudo cryptsetup luksOpen --test-passphrase $LUKS_DEVICE --key-slot $slot"
+            done
+            print_info ""
+            print_info "2. If successful (no output), remove that slot:"
+            print_info "   sudo cryptsetup luksKillSlot $LUKS_DEVICE <slot>"
+            print_info ""
+            print_info "For more details, see the README section: 'LUKSキースロットの確認と管理'"
         fi
     fi
 }
@@ -512,7 +552,7 @@ check_setup_state() {
     # Check for recovery keys
     local recovery_key_count=0
     if [[ -d /root ]]; then
-        recovery_key_count=$(ls /root/.luks-recovery-key-*.txt 2>/dev/null | wc -l)
+        recovery_key_count=$(find /root -maxdepth 1 -name ".luks-recovery-key-*.txt" -type f 2>/dev/null | wc -l)
     fi
     
     if [[ $recovery_key_count -gt 0 ]]; then
@@ -571,7 +611,7 @@ verify_setup() {
 # Function to confirm action
 confirm_action() {
     local prompt="$1"
-    read -p "$prompt (y/N): " response
+    read -r -p "$prompt (y/N): " response
     [[ "$response" =~ ^[Yy]$ ]]
 }
 
