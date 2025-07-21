@@ -42,13 +42,10 @@ command_exists() {
 
 # Function to generate a secure random passphrase
 generate_recovery_key() {
-    # Generate 8 random words from /usr/share/dict/words if available
-    if [[ -f /usr/share/dict/words ]]; then
-        shuf -n 8 /usr/share/dict/words | tr '\n' '-' | sed 's/-$//' | tr -d "'"
-    else
-        # Fallback to random base64 string (no single quotes in base64)
-        openssl rand -base64 32
-    fi
+    # Generate URL-safe base64 to avoid any potentially problematic characters
+    # Replace + with -, / with _ (URL-safe base64)
+    # This ensures compatibility with all shell contexts
+    openssl rand -base64 48 | tr -d '\n' | tr '+/' '-_'
 }
 
 # Function to check TPM2 availability
@@ -198,7 +195,13 @@ setup_new_credentials() {
         if [[ "$use_existing" =~ ^[Yy]$ ]]; then
             RECOVERY_KEY_FILE="${existing_keys[0]}"
             # Extract recovery key from file
+            # Extract recovery key from file, ensuring no shell-breaking characters
             RECOVERY_KEY=$(grep "Recovery Key:" "$RECOVERY_KEY_FILE" | cut -d: -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+            # Validate recovery key contains only safe characters (URL-safe base64)
+            if ! [[ "$RECOVERY_KEY" =~ ^[A-Za-z0-9_=-]+$ ]]; then
+                print_error "Recovery key contains invalid characters. File may be corrupted."
+                return 1
+            fi
             if [[ -z "$RECOVERY_KEY" ]]; then
                 print_error "Could not read recovery key from file"
                 return 1
@@ -272,7 +275,7 @@ setup_new_credentials() {
             # We'll need to get the existing password for operations
             read -s -p "Enter existing LUKS password for operations: " NEW_PASSWORD
             echo
-            if echo -n "$NEW_PASSWORD" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+            if printf '%s' "$NEW_PASSWORD" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
                 print_success "Using existing password for operations"
                 password_needed=false
             else
@@ -337,7 +340,7 @@ bind_tpm2() {
 # Function to check if a password already exists in LUKS
 check_password_exists() {
     local password="$1"
-    echo -n "$password" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null
+    printf '%s' "$password" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null
 }
 
 # Function to manage LUKS key slots
@@ -353,7 +356,7 @@ manage_key_slots() {
     echo
     
     # Test current password
-    if ! echo -n "$CURRENT_PASSWORD" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    if ! printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksOpen --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
         print_error "Invalid password"
         return 1
     fi
@@ -381,11 +384,11 @@ manage_key_slots() {
         
         # Add new password
         print_info "Adding new password to slot $new_slot..."
-        if echo -n "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$new_slot" <(echo -n "$NEW_PASSWORD"); then
+        if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$new_slot" <(printf '%s' "$NEW_PASSWORD"); then
             print_success "New password added to slot $new_slot"
         else
             print_warning "Failed to add to slot $new_slot, trying without specific slot..."
-            if echo -n "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(echo -n "$NEW_PASSWORD"); then
+            if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
                 print_success "New password added to an available slot"
             else
                 print_error "Failed to add new password"
@@ -417,11 +420,11 @@ manage_key_slots() {
                 auth_password="$CURRENT_PASSWORD"
             fi
             
-            if echo -n "$auth_password" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$recovery_slot" <(echo -n "$RECOVERY_KEY"); then
+            if printf '%s' "$auth_password" | cryptsetup luksAddKey "$LUKS_DEVICE" --key-slot "$recovery_slot" <(printf '%s' "$RECOVERY_KEY"); then
                 print_success "Recovery key added to slot $recovery_slot"
             else
                 print_warning "Failed to add to slot $recovery_slot, trying without specific slot..."
-                if echo -n "$auth_password" | cryptsetup luksAddKey "$LUKS_DEVICE" <(echo -n "$RECOVERY_KEY"); then
+                if printf '%s' "$auth_password" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$RECOVERY_KEY"); then
                     print_success "Recovery key added to an available slot"
                 else
                     print_warning "Failed to add recovery key - you may need to add it manually later"
@@ -458,7 +461,7 @@ manage_key_slots() {
         if [[ ${#slots_to_check[@]} -eq 1 ]]; then
             local old_slot="${slots_to_check[0]}"
             print_info "Removing old password from slot $old_slot..."
-            echo -n "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$old_slot"
+            printf '%s' "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$old_slot"
             print_success "Old password removed"
         else
             print_warning "Could not automatically identify installation password slot"

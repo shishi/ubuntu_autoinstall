@@ -79,6 +79,73 @@ sudo ./setup-tpm-luks-unlock.sh
 - 複数回実行しても安全（既存のバインディングを検出）
 - 最低2つのキースロットを維持
 
+### LUKSキースロットの確認と管理
+
+**キースロットの詳細確認方法：**
+```bash
+# すべてのキースロットの状態を表示
+sudo cryptsetup luksDump /dev/sda3
+```
+
+出力例：
+```
+Keyslots:
+  0: luks2  # 通常のパスワードスロット
+  1: luks2  # 通常のパスワードスロット（またはTPM用）
+  2: luks2  # 通常のパスワードスロット
+  ...
+Tokens:
+  0: clevis
+      Keyslot: 1  # この場合、スロット1がTPM2で使用されている
+```
+
+**どのスロットに何のパスワードが入っているか判別する方法：**
+
+1. **TPMスロットの確認**：
+```bash
+# Clevisが使用しているスロットを確認
+sudo clevis luks list -d /dev/sda3
+```
+
+2. **各スロットのパスワードをテスト**：
+```bash
+# ubuntuKey（インストール時のパスワード）でテスト
+echo -n "インストール時のパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 0
+echo -n "インストール時のパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 2
+echo -n "インストール時のパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 3
+
+# 新しいユーザーパスワードでテスト
+echo -n "新しいパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 0
+echo -n "新しいパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 2
+echo -n "新しいパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 3
+
+# リカバリーキーでテスト
+RECOVERY_KEY=$(grep "Recovery Key:" /root/.luks-recovery-key-*.txt | tail -1 | cut -d: -f2- | sed 's/^[[:space:]]*//')
+echo -n "$RECOVERY_KEY" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 0
+echo -n "$RECOVERY_KEY" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 2
+echo -n "$RECOVERY_KEY" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 3
+```
+
+テスト結果の見方：
+- **成功した場合**：何も表示されない（そのスロットに該当パスワードが存在）
+- **失敗した場合**：「No key available with this passphrase」というエラーが表示される
+
+**不要なキースロット（ubuntuKeyなど）の削除方法：**
+
+```bash
+# 特定のスロットを削除（例：スロット0）
+sudo cryptsetup luksKillSlot /dev/sda3 0
+# 現在有効なパスワードの入力が必要です
+
+# または、パスワードを指定して該当するスロットを自動削除
+echo -n "削除したいパスワード" | sudo cryptsetup luksRemoveKey /dev/sda3
+```
+
+**注意事項：**
+- 最低でも1つの通常パスワードスロットは残しておくこと
+- TPMスロットだけに依存するのは危険
+- 削除前に必ず他の認証方法が機能することを確認
+
 ### 2. `tpm-status.sh` - TPM状態表示・デバッグスクリプト
 
 このスクリプトは、TPM2とLUKSの状態に関する詳細情報を表示します。
