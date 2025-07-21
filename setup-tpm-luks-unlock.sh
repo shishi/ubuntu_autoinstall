@@ -44,9 +44,9 @@ command_exists() {
 generate_recovery_key() {
     # Generate 8 random words from /usr/share/dict/words if available
     if [[ -f /usr/share/dict/words ]]; then
-        shuf -n 8 /usr/share/dict/words | tr '\n' '-' | sed 's/-$//'
+        shuf -n 8 /usr/share/dict/words | tr '\n' '-' | sed 's/-$//' | tr -d "'"
     else
-        # Fallback to random base64 string
+        # Fallback to random base64 string (no single quotes in base64)
         openssl rand -base64 32
     fi
 }
@@ -191,14 +191,14 @@ setup_new_credentials() {
     if [[ ${#existing_keys[@]} -gt 0 ]]; then
         print_warning "Found ${#existing_keys[@]} existing recovery key file(s):"
         for key in "${existing_keys[@]}"; do
-            echo "  - $key (created: $(stat -c %y "$key" | cut -d' ' -f1))"
+            echo "  - $key (created: $(stat -c %y "$key" 2>/dev/null | awk '{print $1}'))"
         done
         
         read -p "Use existing recovery key? (y/N): " use_existing
         if [[ "$use_existing" =~ ^[Yy]$ ]]; then
             RECOVERY_KEY_FILE="${existing_keys[0]}"
             # Extract recovery key from file
-            RECOVERY_KEY=$(grep "Recovery Key:" "$RECOVERY_KEY_FILE" | cut -d: -f2- | xargs)
+            RECOVERY_KEY=$(grep "Recovery Key:" "$RECOVERY_KEY_FILE" | cut -d: -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
             if [[ -z "$RECOVERY_KEY" ]]; then
                 print_error "Could not read recovery key from file"
                 return 1
