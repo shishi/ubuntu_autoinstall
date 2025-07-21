@@ -4,7 +4,8 @@
       "Bash(./scripts/validate-autoinstall-user-data.py:*)",
       "Bash(cloud-init schema:*)",
       "Bash(true)",
-      "Bash(./pre-install-check.sh:*)"
+      "Bash(./pre-install-check.sh:*)",
+      "WebFetch(domain:canonical-subiquity.readthedocs-hosted.com)"
     ],
     "deny": []
   }

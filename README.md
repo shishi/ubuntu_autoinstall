@@ -445,7 +445,101 @@ Your disk encryption is currently using a TEMPORARY PASSWORD.
 sudo tpm-status
 ```
 
-#### 2. よくある原因と解決方法
+#### 2. TPMサービスの状態確認
+
+**基本的な確認コマンド**
+```bash
+# カスタムTPM状態確認（推奨）
+sudo tpm-status
+
+# systemdサービスの状態
+sudo systemctl status tpm-enroll.service
+
+# サービスの詳細ログ
+sudo journalctl -u tpm-enroll.service -b
+
+# リアルタイムログ監視
+sudo journalctl -u tpm-enroll.service -f
+```
+
+**ハードウェアレベルの確認**
+```bash
+# TPMデバイスの存在確認
+ls -la /dev/tpm*
+
+# TPM2チップの詳細情報
+sudo tpm2_getcap properties-fixed
+
+# TPM2が利用可能か確認
+sudo systemd-cryptenroll --tpm2-device=list
+```
+
+**LUKS暗号化の状態確認**
+```bash
+# LUKSデバイスを特定
+LUKS_DEV=$(sudo blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+
+# TPM2トークンの確認
+sudo cryptsetup luksDump "$LUKS_DEV" | grep -A10 "Tokens:"
+
+# 使用中のキースロット
+sudo cryptsetup luksDump "$LUKS_DEV" | grep "Key Slot"
+```
+
+**状態ファイルの確認**
+```bash
+# TPM登録状態
+ls -la /var/lib/tpm-luks/
+
+# 登録日時
+cat /var/lib/tpm-luks/enrolled-date
+
+# 失敗情報
+cat /var/lib/tpm-luks/failed
+
+# ログファイル
+tail -50 /var/log/tpm-luks/enrollment.log
+```
+
+**起動時の動作確認**
+```bash
+# TPM関連のカーネルメッセージ
+sudo dmesg | grep -i tpm
+
+# 暗号化デバイスのアンロック状態
+sudo systemctl list-units --type=device | grep crypt
+
+# crypttab設定
+sudo cat /etc/crypttab
+```
+
+**包括的な状態確認スクリプト**
+```bash
+# すべての状態を一度に確認
+cat << 'EOF' > /tmp/check-tpm-all.sh
+#!/bin/bash
+echo "=== TPM Service Status ==="
+sudo systemctl status tpm-enroll.service --no-pager
+
+echo -e "\n=== TPM State Files ==="
+ls -la /var/lib/tpm-luks/
+
+echo -e "\n=== Recent TPM Logs ==="
+sudo tail -20 /var/log/tpm-luks/enrollment.log 2>/dev/null || echo "No logs found"
+
+echo -e "\n=== LUKS TPM Tokens ==="
+LUKS_DEV=$(sudo blkid -t TYPE="crypto_LUKS" -o device | head -n 1)
+[ -n "$LUKS_DEV" ] && sudo cryptsetup luksDump "$LUKS_DEV" | grep -A10 "Tokens:" || echo "No LUKS device found"
+
+echo -e "\n=== TPM Hardware Status ==="
+sudo tpm2_getcap properties-fixed | head -20 || echo "TPM2 tools not available"
+EOF
+
+chmod +x /tmp/check-tpm-all.sh
+/tmp/check-tpm-all.sh
+```
+
+#### 3. よくある原因と解決方法
 
 **A. TPMがBIOSで無効になっている**
 1. PCを再起動してBIOS/UEFI設定に入る

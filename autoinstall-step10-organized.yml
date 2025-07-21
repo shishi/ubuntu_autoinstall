@@ -71,7 +71,7 @@ autoinstall:
       - type: dm_crypt
         id: dm-crypt-main
         volume: partition-main
-        key: "temporaryPassword!"
+        key: "ubuntuKey"
         preserve: false
       
       - type: lvm_volgroup
@@ -213,7 +213,7 @@ autoinstall:
       
       # Add recovery key
       LUKS_DEV=$(cat /var/lib/tpm-luks/device 2>/dev/null)
-      [ -n "$LUKS_DEV" ] && echo "temporaryPassword!" | cryptsetup luksAddKey "$LUKS_DEV" "$USER_HOME/LUKS-Recovery/recovery-key.txt"
+      [ -n "$LUKS_DEV" ] && echo "ubuntuKey" | cryptsetup luksAddKey "$LUKS_DEV" "$USER_HOME/LUKS-Recovery/recovery-key.txt"
       '
     
     # TPM enrollment script with organized file structure
@@ -272,7 +272,7 @@ autoinstall:
         
         # Remove temporary password
         log "Removing temporary password"
-        if echo "temporaryPassword!" | cryptsetup luksRemoveKey "$LUKS_DEV" 2>&1 | tee -a "$LOG_FILE"; then
+        if echo "ubuntuKey" | cryptsetup luksRemoveKey "$LUKS_DEV" 2>&1 | tee -a "$LOG_FILE"; then
           log "Temporary password removed"
         else
           log "WARNING: Failed to remove temporary password"
@@ -296,20 +296,31 @@ autoinstall:
       STATE_DIR="/var/lib/tpm-luks"
       LOG_DIR="/var/log/tpm-luks"
       
+      # Colors for output
+      RED='\033[0;31m'
+      GREEN='\033[0;32m'
+      YELLOW='\033[0;33m'
+      NC='\033[0m' # No Color
+      
       echo "=== TPM Enrollment Status ==="
       echo "Date: $(date)"
       echo
       
+      # Initialize problem counter
+      PROBLEMS=0
+      
       # Check state files
       if [ -f "$STATE_DIR/enrolled" ]; then
-        echo "✓ Enrollment marker exists"
+        echo -e "${GREEN}✓${NC} Enrollment marker exists"
         echo "  Enrolled: $(cat "$STATE_DIR/enrolled-date" 2>/dev/null || echo "unknown date")"
       else
-        echo "✗ Not enrolled"
+        echo -e "${RED}✗${NC} Not enrolled"
+        ((PROBLEMS++))
       fi
       
       if [ -f "$STATE_DIR/failed" ]; then
-        echo "⚠ Last failure: $(cat "$STATE_DIR/failed")"
+        echo -e "${YELLOW}⚠${NC} Last failure: $(cat "$STATE_DIR/failed")"
+        ((PROBLEMS++))
       fi
       
       # Check LUKS
@@ -317,25 +328,74 @@ autoinstall:
       if [ -n "$LUKS_DEV" ]; then
         echo
         echo "LUKS Device: $LUKS_DEV"
+        
+        # Check for TPM token
+        HAS_TPM_TOKEN=false
         if cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -q "systemd-tpm2"; then
-          echo "✓ TPM2 token present in LUKS header"
+          echo -e "${GREEN}✓${NC} TPM2 token present in LUKS header"
+          HAS_TPM_TOKEN=true
         else
-          echo "✗ No TPM2 token in LUKS header"
+          echo -e "${RED}✗${NC} No TPM2 token in LUKS header"
+          ((PROBLEMS++))
         fi
         
         echo
         echo "Key slots:"
-        cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+: luks2" || echo "  Unable to read slots"
+        SLOTS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -E "^\s*[0-9]+: luks2")
+        if [ -n "$SLOTS" ]; then
+          echo "$SLOTS"
+          
+          # Check for unbound slots (TPM slots)
+          if ! echo "$SLOTS" | grep -q "unbound"; then
+            if [ "$HAS_TPM_TOKEN" = false ]; then
+              echo -e "  ${YELLOW}⚠${NC} No TPM-bound slots found (no 'unbound' slots)"
+            fi
+          fi
+          
+          # Count active slots
+          SLOT_COUNT=$(echo "$SLOTS" | wc -l)
+          if [ "$SLOT_COUNT" -gt 2 ] && [ "$HAS_TPM_TOKEN" = false ]; then
+            echo -e "  ${YELLOW}⚠${NC} Multiple password slots active - temporary password may still be present"
+            ((PROBLEMS++))
+          fi
+        else
+          echo "  Unable to read slots"
+          ((PROBLEMS++))
+        fi
+        
+        # Check for tokens
+        echo
+        echo "Tokens:"
+        TOKENS=$(cryptsetup luksDump "$LUKS_DEV" 2>/dev/null | grep -A10 "^Tokens:" | grep -E "^\s*[0-9]+:")
+        if [ -n "$TOKENS" ]; then
+          echo "$TOKENS"
+        else
+          echo -e "  ${RED}✗${NC} No tokens found"
+        fi
+      else
+        echo -e "${RED}✗${NC} No LUKS device found"
+        ((PROBLEMS++))
       fi
       
       # Check TPM device
       echo
       echo "TPM Device:"
       if [ -e /dev/tpm0 ] || [ -e /dev/tpmrm0 ]; then
-        echo "✓ TPM device present"
+        echo -e "${GREEN}✓${NC} TPM device present"
         ls -la /dev/tpm* 2>/dev/null
       else
-        echo "✗ No TPM device found"
+        echo -e "${RED}✗${NC} No TPM device found"
+        ((PROBLEMS++))
+      fi
+      
+      # Check systemd-cryptenroll availability
+      echo
+      echo "TPM2 Support:"
+      if systemd-cryptenroll --tpm2-device=list &>/dev/null; then
+        echo -e "${GREEN}✓${NC} systemd-cryptenroll TPM2 support available"
+      else
+        echo -e "${RED}✗${NC} systemd-cryptenroll TPM2 support NOT available"
+        ((PROBLEMS++))
       fi
       
       # Recent logs
@@ -345,11 +405,25 @@ autoinstall:
         tail -5 "$LOG_DIR/enrollment.log" 2>/dev/null
       fi
       
-      # Actionable advice
-      if [ ! -f "$STATE_DIR/enrolled" ]; then
-        echo
-        echo "To enroll manually: sudo tpm-enroll"
-        echo "For help: https://github.com/shishi/ubuntu_autoinstall#tpm-enrollment-failed"
+      # Summary and actionable advice
+      echo
+      echo "=== Summary ==="
+      if [ "$PROBLEMS" -eq 0 ] && [ -f "$STATE_DIR/enrolled" ]; then
+        echo -e "${GREEN}✓${NC} TPM enrollment appears to be working correctly"
+      else
+        echo -e "${RED}✗${NC} Found $PROBLEMS problem(s)"
+        
+        if [ ! -f "$STATE_DIR/enrolled" ] || [ "$HAS_TPM_TOKEN" = false ]; then
+          echo
+          echo -e "${RED}SECURITY WARNING:${NC}"
+          echo "Your disk encryption is using a temporary password: ubuntuKey"
+          echo
+          echo "To fix this:"
+          echo "  1. Enable TPM 2.0 in BIOS/UEFI (not TPM 1.2)"
+          echo "  2. Run: sudo tpm-enroll"
+          echo
+          echo "For detailed help: https://github.com/shishi/ubuntu_autoinstall#tpm-enrollment-failed"
+        fi
       fi
       EOF
       chmod +x /usr/local/bin/tpm-status
@@ -369,7 +443,7 @@ autoinstall:
         echo "============================================================"
         echo "⚠️  SECURITY WARNING: TPM ENROLLMENT FAILED!"
         echo "============================================================"
-        echo "Your disk encryption is using a weak temporary password."
+        echo "Your disk encryption is using a weak temporary password: ubuntuKey"
         echo
         echo "Fix this NOW:"
         echo "  1. Check TPM status: sudo tpm-status"
@@ -385,7 +459,7 @@ autoinstall:
           # Critical notification that persists
           notify-send -u critical -t 0 \
             "⚠️ Security Alert: TPM Enrollment Failed" \
-            "Your disk encryption is using a weak temporary password!\n\nRun: sudo tpm-enroll\n\nClick here for details." \
+            "Your disk encryption is using a weak temporary password (ubuntuKey)!\n\nRun: sudo tpm-enroll\n\nClick here for details." \
             --action="open-terminal=Open Terminal" \
             --action="view-help=View Help" 2>/dev/null || true
           
@@ -393,7 +467,7 @@ autoinstall:
           if command -v zenity >/dev/null 2>&1; then
             zenity --warning \
               --title="TPM Enrollment Failed" \
-              --text="Your disk encryption is at risk!\n\nTemporary password is still active.\n\nPlease run: sudo tpm-enroll" \
+              --text="Your disk encryption is at risk!\n\nTemporary password (ubuntuKey) is still active.\n\nPlease run: sudo tpm-enroll" \
               --width=400 2>/dev/null &
           fi
         fi
@@ -402,7 +476,7 @@ autoinstall:
         if [ -n "$WAYLAND_DISPLAY" ] && command -v notify-send >/dev/null 2>&1; then
           notify-send -u critical -t 0 \
             "⚠️ Security Alert: TPM Enrollment Failed" \
-            "Your disk encryption is using a weak temporary password!\n\nRun: sudo tpm-enroll" 2>/dev/null || true
+            "Your disk encryption is using a weak temporary password (ubuntuKey)!\n\nRun: sudo tpm-enroll" 2>/dev/null || true
         fi
       fi
       EOF
