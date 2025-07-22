@@ -15,7 +15,9 @@
       "Bash(./check_embedded_scripts.sh:*)",
       "Bash(apt-cache:*)",
       "Bash(systemctl:*)",
-      "WebFetch(domain:bugs.launchpad.net)"
+      "WebFetch(domain:bugs.launchpad.net)",
+      "Bash(shellcheck:*)",
+      "WebFetch(domain:manpages.ubuntu.com)"
     ],
     "deny": []
   }
