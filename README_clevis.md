@@ -40,7 +40,7 @@
 
 ## スクリプト一覧
 
-### 1. `setup-tpm-luks-unlock.sh` - TPM自動アンロック設定スクリプト
+### 1. `setup-tpm-luks-unlock_clevis.sh` - TPM自動アンロック設定スクリプト
 
 このスクリプトは、TPM2を使用したLUKSの自動復号を設定します。
 
@@ -75,7 +75,7 @@
 
 **使用方法：**
 ```bash
-sudo ./setup-tpm-luks-unlock.sh
+sudo ./setup-tpm-luks-unlock_clevis.sh
 ```
 
 **実行時の動作：**
@@ -171,7 +171,7 @@ echo -n "削除したいパスワード" | sudo cryptsetup luksRemoveKey /dev/sd
 - TPMスロットだけに依存するのは危険
 - 削除前に必ず他の認証方法が機能することを確認
 
-### 2. `tpm-status.sh` - TPM状態表示・デバッグスクリプト
+### 2. `tpm-status_clevis.sh` - TPM状態表示・デバッグスクリプト
 
 このスクリプトは、TPM2とLUKSの状態に関する詳細情報を表示します。
 
@@ -188,29 +188,25 @@ echo -n "削除したいパスワード" | sudo cryptsetup luksRemoveKey /dev/sd
 **使用方法：**
 ```bash
 # フルレポート
-sudo ./tpm-status.sh
+sudo ./tpm-status_clevis.sh
 
 # 特定の情報のみ表示
-sudo ./tpm-status.sh tpm      # TPMデバイスと機能
-sudo ./tpm-status.sh pcr      # PCR値
-sudo ./tpm-status.sh luks     # LUKSデバイス情報
-sudo ./tpm-status.sh clevis   # Clevis状態
-sudo ./tpm-status.sh boot     # ブート設定
-sudo ./tpm-status.sh diag     # 簡易診断
+sudo ./tpm-status_clevis.sh tpm      # TPMデバイスと機能
+sudo ./tpm-status_clevis.sh pcr      # PCR値
+sudo ./tpm-status_clevis.sh luks     # LUKSデバイス情報
+sudo ./tpm-status_clevis.sh clevis   # Clevis状態
+sudo ./tpm-status_clevis.sh boot     # ブート設定
+sudo ./tpm-status_clevis.sh diag     # 簡易診断
 ```
 
 **root不要の使用：**
 一部の情報は一般ユーザーでも確認可能：
 ```bash
-./tpm-status.sh tpm
-./tpm-status.sh pcr
+./tpm-status_clevis.sh tpm
+./tpm-status_clevis.sh pcr
 ```
 
-### 3. `cleanup-tpm-slots.sh` - 重複TPMスロット削除スクリプト
-
-このスクリプトは、LUKSデバイスから重複したTPMスロットを安全に削除します。
-
-### 4. `check-tpm-health.sh` - TPMヘルスチェックスクリプト
+### 3. `check-tpm-health_clevis.sh` - TPMヘルスチェックスクリプト
 
 システム更新前後にTPM自動復号の状態を確認するスクリプトです。
 
@@ -223,44 +219,159 @@ sudo ./tpm-status.sh diag     # 簡易診断
 **使用方法：**
 ```bash
 # システム更新前
-sudo ./check-tpm-health.sh pre
+sudo ./check-tpm-health_clevis.sh pre
 
 # システム更新後
-sudo ./check-tpm-health.sh post
+sudo ./check-tpm-health_clevis.sh post
 
 # 両方を実行
-sudo ./check-tpm-health.sh
+sudo ./check-tpm-health_clevis.sh
 ```
 
-### 元の3番の続き（cleanup-tpm-slots.sh）
+### 4. `cleanup-tpm-slots_clevis.sh` - 重複TPMスロット削除スクリプト
+
+このスクリプトは、LUKSデバイスから重複したTPMスロットを安全に削除します。ユーザーが保持するスロットを選択できる対話型インターフェースを提供します。
 
 **機能：**
 - 全LUKSデバイスの自動スキャン
-- TPMスロットの自動検出
-- 動作するスロットのテスト
+- TPMスロットの詳細情報表示（スロット番号、PCR値、状態）
+- 各スロットの動作テスト
+- **対話型選択：どのスロットを保持するか選択可能**
 - 重複スロットの安全な削除
 - ドライラン機能
 
 **使用方法：**
 ```bash
 # 全デバイスをクリーンアップ（対話式）
-sudo ./cleanup-tpm-slots.sh
+sudo ./cleanup-tpm-slots_clevis.sh
 
 # ドライラン（変更なし）
-sudo ./cleanup-tpm-slots.sh --dry-run
+sudo ./cleanup-tpm-slots_clevis.sh --dry-run
 
 # 特定デバイスのクリーンアップ
-sudo ./cleanup-tpm-slots.sh /dev/nvme0n1p3
+sudo ./cleanup-tpm-slots_clevis.sh /dev/nvme0n1p3
 
 # ヘルプ表示
-./cleanup-tpm-slots.sh --help
+./cleanup-tpm-slots_clevis.sh --help
 ```
 
 **安全機能：**
 - 少なくとも1つのTPMバインディングを保持
 - 非TPMキースロットには触れない
-- 変更前に確認を求める
-- 動作するスロットを優先的に保持
+- 削除前に詳細情報を表示して確認
+- ユーザーが保持するスロットを選択
+- パスワードとリカバリーキーの確認を促す
+
+**対話例：**
+```
+╔══════════════════════════════════════════════════════════╗
+║ TPM2 Binding Details for /dev/nvme0n1p3                 ║
+╠══════════════════════════════════════════════════════════╣
+║ Slot   Pin Type   PCRs            Status                ║
+║ 1      tpm2       7               Working               ║
+║ 2      tpm2       7               Failed/TPM changed    ║
+╚══════════════════════════════════════════════════════════╝
+
+Which TPM2 slot do you want to KEEP? (Others will be removed)
+Available TPM2 slots: 1 2
+Enter slot number to keep: 1
+```
+
+### 5. `cleanup-password-duplicates_clevis.sh` - 重複パスワード削除スクリプト
+
+このスクリプトは、LUKSデバイスから重複したパスワードエントリを検出して削除します。
+
+**機能：**
+- 指定したパスワードの重複チェック
+- 重複しているスロットの詳細表示
+- **対話型選択：どのスロットを保持するか選択可能**
+- Clevis管理スロットは除外（TPM、Tangなど）
+- ドライラン機能
+
+**使用方法：**
+```bash
+# 全デバイスで重複パスワードをチェック
+sudo ./cleanup-password-duplicates_clevis.sh
+
+# 特定デバイスのチェック
+sudo ./cleanup-password-duplicates_clevis.sh /dev/nvme0n1p3
+
+# ドライラン
+sudo ./cleanup-password-duplicates_clevis.sh --dry-run
+```
+
+**対話例：**
+```
+Enter the password you want to check for duplicates:
+Password to check: ********
+
+Password duplicates found!
+╔══════════════════════════════════════════════════════════╗
+║ Slot Details for /dev/nvme0n1p3                         ║
+╠══════════════════════════════════════════════════════════╣
+║ All key slots:                                           ║
+║   0: luks2                                               ║
+║   1: luks2 (Clevis TPM2)                                ║
+║   2: luks2                                               ║
+║   3: luks2                                               ║
+║                                                          ║
+║ Password matches found in slots: 0 2 3                  ║
+╚══════════════════════════════════════════════════════════╝
+
+Which slot do you want to KEEP? (Others will be removed)
+Available slots: 0 2 3
+Enter slot number to keep: 0
+```
+
+**安全機能：**
+- Clevis管理スロット（TPM、Tangなど）は自動的に除外
+- 削除前に確認を求める
+- 少なくとも1つのパスワードスロットを保持
+
+### 6. `test-idempotency_clevis.sh` - セットアップスクリプトの冪等性テスト
+
+開発者向けのテストスクリプトで、`setup-tpm-luks-unlock_clevis.sh`が複数回実行されても安全であることを確認します。
+
+**使用方法：**
+```bash
+sudo ./test-idempotency_clevis.sh
+```
+
+### 元の3番の続き（cleanup-tpm-slots_clevis.sh）
+
+## スクリプトの実行順序
+
+通常の使用では、以下の順序でスクリプトを実行します：
+
+1. **初期セットアップ**
+   ```bash
+   sudo ./setup-tpm-luks-unlock_clevis.sh
+   ```
+
+2. **状態確認**
+   ```bash
+   sudo ./tpm-status_clevis.sh
+   ```
+
+3. **必要に応じてクリーンアップ**
+   ```bash
+   # TPMスロットの重複削除
+   sudo ./cleanup-tpm-slots_clevis.sh
+   
+   # パスワードの重複削除
+   sudo ./cleanup-password-duplicates_clevis.sh
+   ```
+
+4. **システム更新時**
+   ```bash
+   # 更新前
+   sudo ./check-tpm-health_clevis.sh pre
+   
+   # システム更新実行
+   
+   # 更新後
+   sudo ./check-tpm-health_clevis.sh post
+   ```
 
 ## Clevis以外の自動復号方法
 
@@ -334,13 +445,13 @@ sudo systemd-cryptenroll /dev/nvme0n1p3 --tpm2-device=list
 
 ```bash
 # 大きな更新前の確認
-sudo ./check-tpm-health.sh pre
+sudo ./check-tpm-health_clevis.sh pre
 
 # BIOS更新前の一時パスワード追加
 sudo cryptsetup luksAddKey /dev/nvme0n1p3
 
 # 更新後の動作確認
-sudo ./check-tpm-health.sh post
+sudo ./check-tpm-health_clevis.sh post
 ```
 
 ## トラブルシューティング
@@ -365,13 +476,13 @@ systemctl status clevis-luks-askpass.path
 sudo update-initramfs -u -k all
 
 # デバッグ情報の確認
-sudo ./tpm-status.sh diag
+sudo ./tpm-status_clevis.sh diag
 ```
 
 ### PCR値が変更された
 ```bash
 # 現在のPCR値を確認
-sudo ./tpm-status.sh pcr
+sudo ./tpm-status_clevis.sh pcr
 
 # 再バインドが必要
 sudo clevis luks unbind -d /dev/nvme0n1p3 -s [slot]

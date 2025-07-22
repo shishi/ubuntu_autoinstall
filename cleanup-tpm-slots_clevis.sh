@@ -10,6 +10,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
@@ -27,6 +28,13 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_section() {
+    echo
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}▶ $1${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
 }
 
 # Check if running as root
@@ -115,6 +123,36 @@ analyze_clevis_bindings() {
     echo "${tpm_slots[*]}"
 }
 
+# Function to get detailed Clevis binding information
+get_clevis_binding_details() {
+    local device="$1"
+    local slot="$2"
+    local -A details
+    
+    # Get Clevis configuration for the slot
+    local config
+    config=$(clevis luks list -d "$device" 2>/dev/null | grep "^${slot}:" | sed "s/^${slot}: //")
+    
+    # Extract pin type
+    if [[ "$config" =~ ^([^[:space:]]+) ]]; then
+        details["pin"]="${BASH_REMATCH[1]}"
+    fi
+    
+    # For TPM2 pins, try to extract PCR banks
+    if [[ "${details[pin]}" == "tpm2" ]] && [[ "$config" =~ \{.*\} ]]; then
+        local json_part="${BASH_REMATCH[0]}"
+        # Try to extract pcr_ids
+        if [[ "$json_part" =~ \"pcr_ids\":[[:space:]]*\"([^\"]+)\" ]]; then
+            details["pcrs"]="${BASH_REMATCH[1]}"
+        fi
+    fi
+    
+    # Return details as formatted output
+    for key in "${!details[@]}"; do
+        echo "$key=${details[$key]}"
+    done
+}
+
 # Function to test a TPM slot
 test_tpm_slot() {
     local device="$1"
@@ -154,6 +192,65 @@ test_tpm_slot() {
     fi
 }
 
+# Function to display TPM slot information
+display_tpm_slot_info() {
+    local device="$1"
+    shift
+    local -a tpm_slots=("$@")
+    
+    print_section "TPM2 Binding Details for $device"
+    
+    # Display slot information in a table format
+    printf "%-6s %-10s %-15s %-20s\n" "Slot" "Pin Type" "PCRs" "Status"
+    printf "%s\n" "──────────────────────────────────────────────────────────────"
+    
+    for slot in "${tpm_slots[@]}"; do
+        local -A details
+        while IFS='=' read -r key value; do
+            details["$key"]="$value"
+        done < <(get_clevis_binding_details "$device" "$slot")
+        
+        local pin="${details[pin]:-unknown}"
+        local pcrs="${details[pcrs]:-unknown}"
+        local status="Unknown"
+        
+        # Test the slot to determine status
+        if test_tpm_slot "$device" "$slot" >/dev/null 2>&1; then
+            status="Working"
+        else
+            # Check if device is unlocked
+            for mapped in /dev/mapper/*; do
+                if [[ -b "$mapped" ]] && cryptsetup status "$(basename "$mapped")" 2>/dev/null | grep -q "$device"; then
+                    status="Cannot test (device unlocked)"
+                    break
+                fi
+            done
+            if [[ "$status" == "Unknown" ]]; then
+                status="Failed/TPM changed"
+            fi
+        fi
+        
+        printf "%-6s %-10s %-15s %-20s\n" "$slot" "$pin" "$pcrs" "$status"
+    done
+    
+    echo
+    
+    # Additional information
+    print_info "Additional Information:"
+    
+    # Show current PCR values for comparison
+    if command_exists tpm2_pcrread; then
+        echo
+        print_info "Current PCR values (for reference):"
+        tpm2_pcrread sha256:7 2>/dev/null | grep -A1 "sha256" | tail -1 | sed 's/^/  PCR[7]: /' || true
+    fi
+    
+    # Show full Clevis bindings
+    echo
+    print_info "Full Clevis bindings:"
+    clevis luks list -d "$device" 2>/dev/null | sed 's/^/  /' || print_info "  Unable to list bindings"
+}
+
 # Function to get all LUKS slots info
 get_luks_slots_info() {
     local device="$1"
@@ -187,8 +284,7 @@ cleanup_device() {
     local device="$1"
     local dry_run="${2:-false}"
     
-    print_info "Processing device: $device"
-    echo "----------------------------------------"
+    print_section "TPM2 Slot Analysis for $device"
     
     # Get all slots
     local all_slots
@@ -196,7 +292,7 @@ cleanup_device() {
     print_info "Total enabled key slots: ${#all_slots[@]} (${all_slots[*]})"
     
     # Get TPM slots from Clevis
-    print_info "Analyzing Clevis bindings on $device..."
+    print_info "Analyzing Clevis bindings..."
     local tpm_slots_str
     tpm_slots_str=$(analyze_clevis_bindings "$device")
     local -a tpm_slots=()
@@ -204,64 +300,54 @@ cleanup_device() {
         IFS=' ' read -r -a tpm_slots <<< "$tpm_slots_str"
     fi
     
-    if [[ ${#tpm_slots[@]} -le 1 ]]; then
-        print_success "No duplicate TPM slots to clean up"
+    if [[ ${#tpm_slots[@]} -eq 0 ]]; then
+        print_info "No TPM2 bindings found on this device"
+        return 0
+    elif [[ ${#tpm_slots[@]} -eq 1 ]]; then
+        print_success "Only one TPM2 binding found (slot ${tpm_slots[0]})"
+        print_info "No duplicates to clean up"
         return 0
     fi
     
-    # Test which TPM slots work
-    local -a working_slots=()
-    local -a broken_slots=()
+    # Display detailed information
+    display_tpm_slot_info "$device" "${tpm_slots[@]}"
     
-    for slot in "${tpm_slots[@]}"; do
-        if test_tpm_slot "$device" "$slot"; then
-            working_slots+=("$slot")
+    echo
+    print_warning "Multiple TPM2 bindings detected!"
+    print_info "Possible reasons for duplicates:"
+    print_info "  • Re-enrollment after BIOS/firmware updates"
+    print_info "  • Changed PCR policies"
+    print_info "  • Testing or troubleshooting attempts"
+    echo
+    
+    # Let user choose which slot to keep
+    print_warning "Which TPM2 slot do you want to KEEP? (Others will be removed)"
+    print_info "Available TPM2 slots: ${tpm_slots[*]}"
+    print_info "Recommendation: Keep a working slot if available, or the most recently created slot"
+    
+    local keep_slot
+    while true; do
+        read -r -p "Enter slot number to keep: " keep_slot
+        if [[ " ${tpm_slots[*]} " =~ " ${keep_slot} " ]]; then
+            break
         else
-            broken_slots+=("$slot")
+            print_error "Invalid choice. Please select from: ${tpm_slots[*]}"
         fi
     done
     
-    print_info "Summary:"
-    print_info "  Working TPM slots: ${#working_slots[@]} (${working_slots[*]:-none})"
-    print_info "  Non-working TPM slots: ${#broken_slots[@]} (${broken_slots[*]:-none})"
-    
-    # Determine which slots to remove
+    # Determine slots to remove
     local -a slots_to_remove=()
-    
-    # If we have working slots, keep only the first one
-    if [[ ${#working_slots[@]} -gt 0 ]]; then
-        local keep_slot="${working_slots[0]}"
-        print_success "Keeping working TPM slot: $keep_slot"
-        
-        # Mark other working slots for removal
-        for slot in "${working_slots[@]:1}"; do
+    for slot in "${tpm_slots[@]}"; do
+        if [[ "$slot" != "$keep_slot" ]]; then
             slots_to_remove+=("$slot")
-        done
-        
-        # Mark all broken slots for removal
-        slots_to_remove+=("${broken_slots[@]}")
-    else
-        # No working slots, remove all but the most recent
-        print_warning "No working TPM slots found. This might be due to TPM state change."
-        if [[ ${#tpm_slots[@]} -gt 0 ]]; then
-            # Keep the highest numbered slot (usually most recent)
-            local keep_slot="${tpm_slots[-1]}"
-            print_info "Keeping most recent TPM slot: $keep_slot"
-            
-            # Mark others for removal
-            for slot in "${tpm_slots[@]::${#tpm_slots[@]}-1}"; do
-                slots_to_remove+=("$slot")
-            done
         fi
-    fi
+    done
     
-    # Show plan
-    if [[ ${#slots_to_remove[@]} -eq 0 ]]; then
-        print_success "No slots need to be removed"
-        return 0
-    fi
-    
-    print_warning "Slots to be removed: ${slots_to_remove[*]}"
+    # Show removal plan
+    echo
+    print_section "Removal Plan"
+    print_success "Will KEEP TPM2 slot: $keep_slot"
+    print_warning "Will REMOVE TPM2 slots: ${slots_to_remove[*]}"
     
     # Dry run mode
     if [[ "$dry_run" == "true" ]]; then
@@ -269,29 +355,61 @@ cleanup_device() {
         return 0
     fi
     
-    # Confirm action
-    if ! confirm_action "Do you want to remove these duplicate TPM slots?"; then
-        print_info "Skipping cleanup for $device"
+    # Final confirmation
+    echo
+    print_warning "⚠️  IMPORTANT: Make sure you have:"
+    print_info "  • A working password for this device"
+    print_info "  • Your recovery key saved securely"
+    print_info "  • Tested that the TPM2 unlock works (or can reboot to test)"
+    echo
+    
+    if ! confirm_action "Are you sure you want to remove the selected TPM2 slots?"; then
+        print_info "Operation cancelled"
         return 0
     fi
     
     # Remove slots
+    print_section "Removing TPM2 Slots"
+    
     local removed_count=0
     for slot in "${slots_to_remove[@]}"; do
-        print_info "Removing TPM slot $slot..."
+        print_info "Removing TPM2 slot $slot..."
         if clevis luks unbind -d "$device" -s "$slot" -f 2>/dev/null; then
             print_success "Removed slot $slot"
             ((removed_count++))
         else
             print_error "Failed to remove slot $slot"
+            print_info "Possible reasons: slot is protected or already removed"
         fi
     done
     
-    print_success "Cleanup complete. Removed $removed_count slots."
+    echo
+    if [[ $removed_count -gt 0 ]]; then
+        print_success "Cleanup complete. Removed $removed_count TPM2 slots."
+    else
+        print_warning "No slots were removed."
+    fi
     
     # Show final state
+    echo
+    print_section "Final State"
+    local final_tpm_slots
+    final_tpm_slots=$(analyze_clevis_bindings "$device")
+    if [[ -n "$final_tpm_slots" ]]; then
+        print_info "Remaining TPM2 slots: $final_tpm_slots"
+    else
+        print_warning "No TPM2 bindings found (this shouldn't happen!)"
+    fi
+    
+    # Show full Clevis bindings
+    echo
     print_info "Final Clevis bindings:"
     clevis luks list -d "$device" 2>/dev/null | sed 's/^/  /' || print_warning "  No Clevis bindings found"
+    
+    # Remind about testing
+    echo
+    print_warning "⚠️  IMPORTANT: Test the TPM2 unlock on next reboot!"
+    print_info "If TPM2 unlock fails, use your password or recovery key"
 }
 
 # Function to cleanup all devices
@@ -311,6 +429,9 @@ cleanup_all_devices() {
     for device in "${devices[@]}"; do
         cleanup_device "$device" "$dry_run"
         echo
+        if [[ ${#devices[@]} -gt 1 ]]; then
+            read -r -p "Press Enter to continue to next device (or Ctrl+C to exit)..."
+        fi
     done
 }
 
@@ -335,12 +456,18 @@ EXAMPLES:
     $0 /dev/sda3          # Clean specific device
     $0 -d /dev/nvme0n1p3  # Dry run on specific device
 
-SAFETY FEATURES:
-    - Always keeps at least one TPM binding (preferably working)
-    - Never touches non-TPM key slots
-    - Asks for confirmation before making changes
-    - Tests TPM slots before deciding what to keep
+FEATURES:
+    - Shows detailed information about each TPM2 binding
+    - Displays PCR values and binding status
+    - Allows user to choose which binding to keep
+    - Shows current system PCR values for comparison
+    - Requires confirmation before making changes
     - Supports dry-run mode to preview changes
+
+SAFETY:
+    - Always keep at least one authentication method
+    - Test TPM2 unlock after making changes
+    - Keep your recovery key accessible
 
 EOF
 }
@@ -378,8 +505,7 @@ main() {
         esac
     done
     
-    print_info "TPM Slot Cleanup Utility"
-    echo "========================"
+    print_section "TPM2 Slot Cleanup Utility (Clevis)"
     
     if [[ "$dry_run" == "true" ]]; then
         print_warning "Running in DRY RUN mode - no changes will be made"
@@ -417,7 +543,7 @@ main() {
     fi
     
     echo
-    print_success "Cleanup process completed"
+    print_success "Operation completed"
     
     if [[ "$dry_run" == "true" ]]; then
         print_info "This was a dry run. Run without --dry-run to make actual changes."

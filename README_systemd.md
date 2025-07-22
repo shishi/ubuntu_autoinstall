@@ -68,6 +68,26 @@
 - インストール時のパスワードの削除（オプション）
 - initramfsの自動更新
 
+**重要：パスワードについて**
+このスクリプトで設定する「新しいパスワード」は、Ubuntu autoinstallで設定した`ubuntuKey`とは**別のもの**です：
+
+- **`ubuntuKey`（インストール時のパスワード）**：
+  - autoinstall設定ファイルで指定した初期パスワード
+  - インストール完了後は削除することが推奨される
+  - 一時的な目的のパスワード
+
+- **新しいユーザーパスワード（このスクリプトで設定）**：
+  - ユーザーが選ぶ日常使用のためのパスワード
+  - TPMが使えない時のバックアップ手段として機能
+  - 長期的に使用するパスワード
+
+**なぜ3つの認証方法が必要か？**
+1. **TPM2自動アンロック**：通常の起動で自動的に使用（パスワード入力不要）
+2. **ユーザーパスワード**：TPMが使えない時の代替手段（カーネル更新後など）
+3. **リカバリーキー**：緊急時用の長い複雑なパスフレーズ（パスワード忘れ、別PCでの読み取り時など）
+
+この多層防御により、一つの方法が失敗してもデータへのアクセスを失わないようにしています。
+
 **使用方法：**
 ```bash
 sudo ./setup-tpm-luks-unlock_systemd.sh
@@ -82,6 +102,22 @@ sudo ./setup-tpm-luks-unlock_systemd.sh
 6. 現在のLUKSパスワードを使用してTPM2に登録
 7. 新しいパスワードとリカバリーキーを追加
 8. 古いインストールパスワードを削除（確認後）
+
+**「現在のLUKSパスワード」について：**
+スクリプト実行中に「Enter current LUKS password」と聞かれた場合、これは**その時点でLUKSデバイスにアクセスできる有効なパスワード**を意味します：
+
+- **初回実行時**：`ubuntuKey`（autoinstallで設定したインストール時のパスワード）を入力
+- **2回目以降**：以下のいずれかを入力
+  - まだ削除していない場合は`ubuntuKey`
+  - 前回設定したユーザーパスワード
+  - リカバリーキー
+
+このパスワードは、TPMへのバインディングや新しいキースロットの追加に必要です。どのキースロットのパスワードでも、LUKSデバイスをアンロックできるものであれば使用できます。
+
+**安全性：**
+- リカバリーキーは `/root/.luks-recovery-key-YYYYMMDD-HHMMSS.txt` に保存
+- 複数回実行しても安全（既存のバインディングを検出）
+- 最低2つのキースロットを維持
 
 **systemd-cryptenrollの使用例：**
 ```bash
@@ -122,32 +158,14 @@ sudo ./tpm-status_systemd.sh boot     # ブート設定
 sudo ./tpm-status_systemd.sh diag     # 簡易診断
 ```
 
-### 3. `cleanup-tpm-slots_systemd.sh` - 重複TPMスロット削除スクリプト
-
-このスクリプトは、LUKSデバイスから重複したTPM2登録を安全に削除します。
-
-**機能：**
-- 全LUKSデバイスの自動スキャン
-- TPM2トークンの自動検出
-- 最新の登録を保持（最高スロット番号）
-- 重複登録の安全な削除
-- ドライラン機能
-
-**使用方法：**
+**root不要の使用：**
+一部の情報は一般ユーザーでも確認可能：
 ```bash
-# 全デバイスをクリーンアップ（対話式）
-sudo ./cleanup-tpm-slots_systemd.sh
-
-# ドライラン（変更なし）
-sudo ./cleanup-tpm-slots_systemd.sh --dry-run
-
-# 特定デバイスのクリーンアップ
-sudo ./cleanup-tpm-slots_systemd.sh /dev/nvme0n1p3
+./tpm-status_systemd.sh tpm
+./tpm-status_systemd.sh pcr
 ```
 
-**注意：** systemd-cryptenrollではスロットの個別テストができないため、最新の登録（最高スロット番号）を保持する方式を採用しています。
-
-### 4. `check-tpm-health_systemd.sh` - TPMヘルスチェックスクリプト
+### 3. `check-tpm-health_systemd.sh` - TPMヘルスチェックスクリプト
 
 システム更新前後にTPM自動復号の状態を確認するスクリプトです。
 
@@ -170,6 +188,115 @@ sudo ./check-tpm-health_systemd.sh post
 sudo ./check-tpm-health_systemd.sh
 ```
 
+### 4. `cleanup-tpm-slots_systemd.sh` - 重複TPMスロット削除スクリプト
+
+このスクリプトは、LUKSデバイスから重複したTPM2登録を安全に削除します。ユーザーが保持するスロットを選択できる対話型インターフェースを提供します。
+
+**機能：**
+- 全LUKSデバイスの自動スキャン
+- TPM2トークンの詳細情報表示（スロット番号、トークンID、PCR値、優先度）
+- **対話型選択：どのスロットを保持するか選択可能**
+- 現在のPCR値との比較表示
+- 重複登録の安全な削除
+- ドライラン機能
+
+**使用方法：**
+```bash
+# 全デバイスをクリーンアップ（対話式）
+sudo ./cleanup-tpm-slots_systemd.sh
+
+# ドライラン（変更なし）
+sudo ./cleanup-tpm-slots_systemd.sh --dry-run
+
+# 特定デバイスのクリーンアップ
+sudo ./cleanup-tpm-slots_systemd.sh /dev/nvme0n1p3
+```
+
+**安全機能：**
+- 少なくとも1つのTPMバインディングを保持
+- 非TPMキースロットには触れない
+- 削除前に詳細情報を表示して確認
+- ユーザーが保持するスロットを選択
+- パスワードとリカバリーキーの確認を促す
+- スロット削除時にパスワード入力が必要
+
+**対話例：**
+```
+╔══════════════════════════════════════════════════════════╗
+║ TPM2 Enrollment Details for /dev/nvme0n1p3              ║
+╠══════════════════════════════════════════════════════════╣
+║ Slot  Token    Priority   PCRs            Status        ║
+║ 2     #0       normal     7               Active        ║
+║ 3     #1       normal     7               Active        ║
+╚══════════════════════════════════════════════════════════╝
+
+Which TPM2 slot do you want to KEEP? (Others will be removed)
+Available TPM2 slots: 2 3
+Enter slot number to keep: 3
+```
+
+**注意：** systemd-cryptenrollではスロットの個別テストができないため、ステータスは「Active」または「Active (device unlocked)」と表示されます。
+
+### 5. `cleanup-password-duplicates_systemd.sh` - 重複パスワード削除スクリプト
+
+このスクリプトは、LUKSデバイスから重複したパスワードエントリを検出して削除します。
+
+**機能：**
+- 指定したパスワードの重複チェック
+- 重複しているスロットの詳細表示
+- **対話型選択：どのスロットを保持するか選択可能**
+- systemd管理スロットは除外（TPM2、FIDO2、PKCS#11）
+- ドライラン機能
+
+**使用方法：**
+```bash
+# 全デバイスで重複パスワードをチェック
+sudo ./cleanup-password-duplicates_systemd.sh
+
+# 特定デバイスのチェック
+sudo ./cleanup-password-duplicates_systemd.sh /dev/nvme0n1p3
+
+# ドライラン
+sudo ./cleanup-password-duplicates_systemd.sh --dry-run
+```
+
+**対話例：**
+```
+Enter the password you want to check for duplicates:
+Password to check: ********
+
+Password duplicates found!
+╔══════════════════════════════════════════════════════════╗
+║ Slot Details for /dev/nvme0n1p3                         ║
+╠══════════════════════════════════════════════════════════╣
+║ All key slots:                                           ║
+║   0: luks2                                               ║
+║   1: luks2                                               ║
+║   2: luks2 (systemd-tpm2 token)                         ║
+║   3: luks2                                               ║
+║                                                          ║
+║ Password matches found in slots: 0 1 3                  ║
+╚══════════════════════════════════════════════════════════╝
+
+Which slot do you want to KEEP? (Others will be removed)
+Available slots: 0 1 3
+Enter slot number to keep: 0
+```
+
+**安全機能：**
+- systemd管理スロット（TPM2、FIDO2、PKCS#11）は自動的に除外
+- 削除前に確認を求める
+- 少なくとも1つのパスワードスロットを保持
+
+### 6. `test-idempotency_systemd.sh` - セットアップスクリプトの冪等性テスト
+
+開発者向けのテストスクリプトで、`setup-tpm-luks-unlock_systemd.sh`が複数回実行されても安全であることを確認します。
+
+**使用方法：**
+```bash
+sudo ./test-idempotency_systemd.sh
+```
+
 ### 5. `test-idempotency_systemd.sh` - 冪等性テストスクリプト
 
 セットアップスクリプトの冪等性（複数回実行しても安全）を確認するためのヘルパースクリプトです。
@@ -178,21 +305,18 @@ sudo ./check-tpm-health_systemd.sh
 
 ### systemd-cryptenrollでの確認方法
 
-**TPM2登録の確認：**
+**キースロットの詳細確認方法：**
 ```bash
-# systemd-cryptenrollで確認
-sudo systemd-cryptenroll /dev/sda3 --tpm2-device=list
-
-# cryptsetup luksDumpで詳細確認
+# すべてのキースロットの状態を表示
 sudo cryptsetup luksDump /dev/sda3
 ```
 
-**LUKS2ヘッダーの構造（systemd-tpm2使用時）：**
+出力例：
 ```
 Keyslots:
-  0: luks2      # 通常のパスワードスロット
-  1: luks2      # 通常のパスワードスロット
-  2: luks2      # TPM2用スロット
+  0: luks2  # 通常のパスワードスロット
+  1: luks2  # 通常のパスワードスロット（またはTPM用）
+  2: luks2  # 通常のパスワードスロット
   ...
 Tokens:
   0: systemd-recovery
@@ -201,14 +325,55 @@ Tokens:
       Keyslot: 2   # TPM2トークンがスロット2を使用
 ```
 
+**どのスロットに何のパスワードが入っているか判別する方法：**
+
+1. **TPMスロットの確認**：
+```bash
+# systemd-cryptenrollで確認
+sudo systemd-cryptenroll /dev/sda3 --tpm2-device=list
+
+# cryptsetup luksDumpでトークン確認
+sudo cryptsetup luksDump /dev/sda3 | grep -A10 "Tokens:"
+```
+
+2. **各スロットのパスワードをテスト**：
+```bash
+# ubuntuKey（インストール時のパスワード）でテスト
+echo -n "インストール時のパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 0
+echo -n "インストール時のパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 2
+echo -n "インストール時のパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 3
+
+# 新しいユーザーパスワードでテスト
+echo -n "新しいパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 0
+echo -n "新しいパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 2
+echo -n "新しいパスワード" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 3
+
+# リカバリーキーでテスト
+RECOVERY_KEY=$(grep "Recovery Key:" /root/.luks-recovery-key-*.txt | tail -1 | cut -d: -f2- | sed 's/^[[:space:]]*//')
+echo -n "$RECOVERY_KEY" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 0
+echo -n "$RECOVERY_KEY" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 2
+echo -n "$RECOVERY_KEY" | sudo cryptsetup luksOpen --test-passphrase /dev/sda3 --key-slot 3
+```
+
+テスト結果の見方：
+- **成功した場合**：何も表示されない（そのスロットに該当パスワードが存在）
+- **失敗した場合**：「No key available with this passphrase」というエラーが表示される
+
 **不要なキースロット（ubuntuKeyなど）の削除方法：**
 
-手動でのスロット削除：
 ```bash
 # 特定のスロットを削除（例：スロット0）
 sudo cryptsetup luksKillSlot /dev/sda3 0
 # 現在有効なパスワードの入力が必要です
+
+# または、パスワードを指定して該当するスロットを自動削除
+echo -n "削除したいパスワード" | sudo cryptsetup luksRemoveKey /dev/sda3
 ```
+
+**注意事項：**
+- 最低でも1つの通常パスワードスロットは残しておくこと
+- TPMスロットだけに依存するのは危険
+- 削除前に必ず他の認証方法が機能することを確認
 
 ## /etc/crypttabの設定
 
@@ -251,6 +416,40 @@ echo "MODULES=most" | sudo tee /etc/initramfs-tools/conf.d/cryptroot
 ```
 
 ただし、これによりinitramfsのサイズが増加するため、通常は推奨されません。
+
+## スクリプトの実行順序
+
+通常の使用では、以下の順序でスクリプトを実行します：
+
+1. **初期セットアップ**
+   ```bash
+   sudo ./setup-tpm-luks-unlock_systemd.sh
+   ```
+
+2. **状態確認**
+   ```bash
+   sudo ./tpm-status_systemd.sh
+   ```
+
+3. **必要に応じてクリーンアップ**
+   ```bash
+   # TPMスロットの重複削除
+   sudo ./cleanup-tpm-slots_systemd.sh
+   
+   # パスワードの重複削除
+   sudo ./cleanup-password-duplicates_systemd.sh
+   ```
+
+4. **システム更新時**
+   ```bash
+   # 更新前
+   sudo ./check-tpm-health_systemd.sh pre
+   
+   # システム更新実行
+   
+   # 更新後
+   sudo ./check-tpm-health_systemd.sh post
+   ```
 
 ## セキュリティに関する考慮事項
 
@@ -296,6 +495,19 @@ echo "MODULES=most" | sudo tee /etc/initramfs-tools/conf.d/cryptroot
 - PCR 8,9（カーネル/initrd）は使用していない
 - 日常の`apt update && apt upgrade`は影響なし
 
+### 予防措置
+
+```bash
+# 大きな更新前の確認
+sudo ./check-tpm-health_systemd.sh pre
+
+# BIOS更新前の一時パスワード追加
+sudo cryptsetup luksAddKey /dev/nvme0n1p3
+
+# 更新後の動作確認
+sudo ./check-tpm-health_systemd.sh post
+```
+
 ## トラブルシューティング
 
 ### TPM2が検出されない
@@ -321,12 +533,13 @@ sudo update-initramfs -u -k all
 sudo ./tpm-status_systemd.sh diag
 ```
 
-### TPM2登録の再実行
+### PCR値が変更された
 ```bash
-# 既存の登録を削除
-sudo systemd-cryptenroll /dev/nvme0n1p3 --wipe-slot=tpm2
+# 現在のPCR値を確認
+sudo ./tpm-status_systemd.sh pcr
 
-# 再登録
+# 再登録が必要
+sudo systemd-cryptenroll /dev/nvme0n1p3 --wipe-slot=tpm2
 sudo systemd-cryptenroll /dev/nvme0n1p3 --tpm2-device=auto --tpm2-pcrs=7
 ```
 
