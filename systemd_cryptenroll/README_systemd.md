@@ -1,5 +1,7 @@
 # Ubuntu TPM2 LUKS Auto-unlock Scripts (systemd-cryptenroll版)
 
+このスクリプトではbootの設定が不完全です。動作にはsystemd-bootとdracut、それに合わせた設定が必要です。GRUBでは`tpm2-device=auto`はサポートされていません。Ubuntu 25.10以降でサポート状況が変わる予定です。特にubuntuのdracutはまだこのまわりが不完全な様子であるため、起動できる設定まではつくりませんでした。状況が変わったらまた試そうかと思います。とりあえず必要そうなことを末尾近くに書いておいたので、またやってみたくなった時に確認する。
+
 このドキュメントは、Ubuntu 24.04 LTSで**systemd-cryptenroll**を使用してTPM2を利用したLUKS暗号化ディスクの自動復号を設定するためのスクリプトについて説明します。
 
 ## 概要
@@ -567,6 +569,60 @@ sudo systemd-cryptenroll /dev/nvme0n1p3 --tpm2-device=auto --tpm2-pcrs=7
    # tpm2-device=auto を追加
    sudo nano /etc/crypttab
    ```
+
+## このスクリプト以外に必要そうなこと
+
+必要な作業リスト
+
+1. dracutのインストール
+
+sudo apt-get update
+sudo apt-get install -y dracut dracut-network
+
+2. dracutの設定
+
+# TPM2サポートを有効化
+sudo mkdir -p /etc/dracut.conf.d
+echo 'add_dracutmodules+=" systemd systemd-cryptsetup tpm2-tss "' | sudo tee /etc/dracut.conf.d/tpm2.conf
+
+3. crypttabの設定
+
+# tpm2-device=autoを追加（dracutなら認識される）
+# 例: dm_crypt-0 UUID=xxx none luks,discard,tpm2-device=auto
+sudo nano /etc/crypttab
+
+4. 既存のinitramfs-toolsを無効化
+
+# 古いinitramfsを削除
+sudo update-initramfs -d -k all
+
+5. dracutでinitramfsを生成
+
+sudo dracut -f --regenerate-all
+
+6. GRUBの更新
+
+sudo update-grub
+
+7. 確認
+
+# 生成されたinitramfsを確認
+ls -la /boot/initramfs* /boot/initrd*
+
+# systemd-cryptsetupが含まれているか確認
+lsinitramfs /boot/initramfs-$(uname -r).img | grep systemd-cryptsetup
+
+8. 再起動
+
+sudo reboot
+
+重要な注意点
+
+- Ubuntu標準のinitramfs-toolsではtpm2-device=autoは動作しません
+- dracutへの切り替えが必須
+- この変更は大きな変更なので、バックアップを推奨
+- Ubuntu 25.10からdracutがデフォルトになる予定
+
 
 ## 注意事項
 
