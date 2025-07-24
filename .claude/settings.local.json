@@ -17,7 +17,9 @@
       "Bash(systemctl:*)",
       "WebFetch(domain:bugs.launchpad.net)",
       "Bash(shellcheck:*)",
-      "WebFetch(domain:manpages.ubuntu.com)"
+      "WebFetch(domain:manpages.ubuntu.com)",
+      "WebFetch(domain:fossies.org)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": []
   }
