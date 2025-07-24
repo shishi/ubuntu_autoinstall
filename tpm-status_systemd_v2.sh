@@ -283,14 +283,44 @@ show_luks_info() {
             luks_version=$(cryptsetup luksDump "$device" 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo "unknown")
             echo "  LUKS Version: $luks_version"
             
-            # Count key slots
-            local slot_count=0
+            # Show key slots with types
+            echo "  Key slots:"
             if [[ "$luks_version" == "2" ]]; then
-                slot_count=$(cryptsetup luksDump "$device" 2>/dev/null | grep -cE "^  [0-9]+: luks2" || echo 0)
+                # For LUKS2, extract slot information with types
+                local slot_info
+                slot_info=$(cryptsetup luksDump "$device" 2>/dev/null | grep -E "^  [0-9]+: luks2" -A 3 || echo "")
+                if [[ -n "$slot_info" ]]; then
+                    # Parse each slot and its type
+                    while IFS= read -r line; do
+                        if [[ "$line" =~ ^[[:space:]]+([0-9]+):[[:space:]]luks2 ]]; then
+                            local slot_num="${BASH_REMATCH[1]}"
+                            # Look for the type in the next few lines
+                            local type_line
+                            type_line=$(cryptsetup luksDump "$device" 2>/dev/null | grep -A 5 "^  $slot_num: luks2" | grep -E "^\s+type:" | head -1 || echo "")
+                            if [[ -n "$type_line" ]]; then
+                                local slot_type
+                                slot_type=$(echo "$type_line" | awk '{print $2}')
+                                echo "    Slot $slot_num: $slot_type"
+                            else
+                                echo "    Slot $slot_num: (type unknown)"
+                            fi
+                        fi
+                    done <<< "$slot_info"
+                else
+                    echo "    No active slots found"
+                fi
             else
-                slot_count=$(cryptsetup luksDump "$device" 2>/dev/null | grep -c "Key Slot.*ENABLED" || echo 0)
+                # For LUKS1, just show enabled slots (no type information)
+                local enabled_slots
+                enabled_slots=$(cryptsetup luksDump "$device" 2>/dev/null | grep "Key Slot.*ENABLED" | awk '{print $3}' | tr -d ':' || echo "")
+                if [[ -n "$enabled_slots" ]]; then
+                    for slot in $enabled_slots; do
+                        echo "    Slot $slot: passphrase (LUKS1)"
+                    done
+                else
+                    echo "    No active slots found"
+                fi
             fi
-            echo "  Active key slots: $slot_count"
             
             # Check for TPM2
             if [[ " ${TPM2_ENROLLMENTS[@]} " =~ " ${device} " ]]; then
