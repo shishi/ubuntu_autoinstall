@@ -113,7 +113,6 @@ install_packages() {
     
     local packages=(
         "systemd"
-        "systemd-cryptenroll"
         "tpm2-tools"
         "libtss2-dev"
         "cryptsetup"
@@ -128,10 +127,11 @@ install_packages() {
         fi
     done
     
-    # Special check for systemd-cryptenroll (might be part of systemd package)
+    # Special check for systemd-cryptenroll command (provided by systemd package)
     if ! command_exists systemd-cryptenroll; then
         print_error "systemd-cryptenroll command not found. Your systemd version may be too old."
         print_info "Ubuntu 22.04 or newer is required for systemd-cryptenroll support."
+        print_info "Note: systemd-cryptenroll is included in the systemd package, not a separate package."
         return 1
     fi
     
