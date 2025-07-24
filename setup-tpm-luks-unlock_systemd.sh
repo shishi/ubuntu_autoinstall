@@ -349,7 +349,15 @@ bind_tpm2() {
         local keyfile
         keyfile=$(mktemp -p /run/systemd)
         chmod 600 "$keyfile"
-        printf '%s' "$NEW_PASSWORD" > "$keyfile"
+        # Write password to file, removing any newlines with tr
+        printf '%s' "$NEW_PASSWORD" | tr -d '\n' > "$keyfile"
+        
+        # First verify the keyfile works
+        if ! cryptsetup open --type luks --key-file "$keyfile" --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+            shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
+            print_error "Password verification failed"
+            return 1
+        fi
         
         # Use --unlock-key-file option
         if systemd-cryptenroll "$LUKS_DEVICE" --unlock-key-file="$keyfile" --wipe-slot=tpm2; then
@@ -370,9 +378,19 @@ bind_tpm2() {
     local keyfile
     keyfile=$(mktemp -p /run/systemd)
     chmod 600 "$keyfile"
-    printf '%s' "$NEW_PASSWORD" > "$keyfile"
+    # Write password to file, removing any newlines with tr
+    printf '%s' "$NEW_PASSWORD" | tr -d '\n' > "$keyfile"
+    
+    # First verify the keyfile works with cryptsetup
+    print_info "Verifying keyfile..."
+    if ! cryptsetup open --type luks --key-file "$keyfile" --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+        shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
+        print_error "Password verification failed. The password may be incorrect."
+        return 1
+    fi
     
     # Use --unlock-key-file option (available since systemd 252)
+    print_info "Enrolling TPM2..."
     if systemd-cryptenroll "$LUKS_DEVICE" \
         --unlock-key-file="$keyfile" \
         --tpm2-device=auto \
@@ -385,7 +403,13 @@ bind_tpm2() {
         # Securely remove keyfile
         shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
         print_error "Failed to enroll LUKS with TPM2"
-        print_info "You may need to enroll manually with: systemd-cryptenroll $LUKS_DEVICE --tpm2-device=auto --tpm2-pcrs=7"
+        print_info "This could be due to:"
+        print_info "  - TPM2 device access issues"
+        print_info "  - Existing TPM2 enrollment (use --wipe-slot=tpm2 first)"
+        print_info "  - systemd-cryptenroll TPM2 support issues"
+        print_info ""
+        print_info "You may need to enroll manually with:"
+        print_info "  systemd-cryptenroll $LUKS_DEVICE --tpm2-device=auto --tpm2-pcrs=7"
         return 1
     fi
     

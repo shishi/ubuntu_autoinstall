@@ -19,7 +19,8 @@
       "Bash(shellcheck:*)",
       "WebFetch(domain:manpages.ubuntu.com)",
       "WebFetch(domain:fossies.org)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(printf:*)"
     ],
     "deny": []
   }
