@@ -112,6 +112,7 @@ install_packages() {
     
     local packages=(
         "systemd"
+        "systemd-boot"
         "tpm2-tools"
         "libtss2-dev"
         "cryptsetup"
