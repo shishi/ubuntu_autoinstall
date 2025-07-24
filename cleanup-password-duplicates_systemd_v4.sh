@@ -108,20 +108,27 @@ get_password_slots() {
     version=$(cryptsetup luksDump "$device" 2>/dev/null | grep "^Version:" | awk '{print $2}')
     
     if [[ "$version" == "2" ]]; then
-        # LUKS2: Check for non-token slots
+        # LUKS2: First get all slots with tokens
+        local -A token_slots
+        local token_section
+        token_section=$(cryptsetup luksDump "$device" 2>/dev/null | sed -n '/^Tokens:/,/^[A-Za-z]/p')
+        
+        # Parse token section to find which slots have tokens
+        if [[ -n "$token_section" ]]; then
+            while IFS= read -r line; do
+                if [[ "$line" =~ Keyslot:[[:space:]]+([0-9]+) ]]; then
+                    token_slots["${BASH_REMATCH[1]}"]=1
+                fi
+            done <<< "$token_section"
+        fi
+        
+        # Now get all active slots and exclude those with tokens
         while IFS= read -r line; do
             if [[ "$line" =~ ^[[:space:]]+([0-9]+):[[:space:]]*luks2 ]]; then
                 local slot="${BASH_REMATCH[1]}"
                 
-                # Check if this slot has a token (TPM2, FIDO2, etc.)
-                local has_token=false
-                if cryptsetup luksDump "$device" 2>/dev/null | 
-                   awk '/^Tokens:/,/^[A-Z]/' | 
-                   grep -q "Keyslot:[[:space:]]*$slot"; then
-                    has_token=true
-                fi
-                
-                if [[ "$has_token" == "false" ]]; then
+                # Only add slot if it doesn't have a token
+                if [[ -z "${token_slots[$slot]:-}" ]]; then
                     slots+=("$slot")
                 fi
             fi
@@ -135,7 +142,9 @@ get_password_slots() {
         done < <(cryptsetup luksDump "$device" 2>/dev/null)
     fi
     
-    printf '%s\n' "${slots[@]}"
+    if [[ ${#slots[@]} -gt 0 ]]; then
+        printf '%s\n' "${slots[@]}"
+    fi
 }
 
 # Test password on slots
@@ -153,7 +162,9 @@ test_password() {
         fi
     done
     
-    printf '%s\n' "${matching_slots[@]}"
+    if [[ ${#matching_slots[@]} -gt 0 ]]; then
+        printf '%s\n' "${matching_slots[@]}"
+    fi
 }
 
 # Process single device
