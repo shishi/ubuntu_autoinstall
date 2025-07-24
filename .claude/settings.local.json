@@ -20,7 +20,8 @@
       "WebFetch(domain:manpages.ubuntu.com)",
       "WebFetch(domain:fossies.org)",
       "WebFetch(domain:github.com)",
-      "Bash(printf:*)"
+      "Bash(printf:*)",
+      "WebFetch(domain:www.freedesktop.org)"
     ],
     "deny": []
   }

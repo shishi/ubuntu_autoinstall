@@ -349,10 +349,24 @@ bind_tpm2() {
         local keyfile
         keyfile=$(mktemp -p /run/systemd)
         chmod 600 "$keyfile"
-        # Write password to file, removing any newlines with tr
-        printf '%s' "$NEW_PASSWORD" | tr -d '\n' > "$keyfile"
+        # Write password to file without any newlines
+        printf '%s' "$NEW_PASSWORD" > "$keyfile"
         
-        # Skip verification - systemd-cryptenroll will fail if password is wrong
+        # Debug: Verify keyfile was created properly (without exposing content)
+        if [[ ! -f "$keyfile" ]]; then
+            print_error "Failed to create keyfile"
+            return 1
+        fi
+        local keyfile_size
+        keyfile_size=$(stat -c%s "$keyfile")
+        print_info "Keyfile created: size=$keyfile_size bytes"
+        
+        # Verify the keyfile works with cryptsetup
+        if ! cryptsetup open --test-passphrase --key-file="$keyfile" "$LUKS_DEVICE" 2>/dev/null; then
+            shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
+            print_error "Keyfile verification failed. The password may be incorrect."
+            return 1
+        fi
         
         # Use --unlock-key-file option
         if systemd-cryptenroll "$LUKS_DEVICE" --unlock-key-file="$keyfile" --wipe-slot=tpm2; then
@@ -373,14 +387,25 @@ bind_tpm2() {
     local keyfile
     keyfile=$(mktemp -p /run/systemd)
     chmod 600 "$keyfile"
-    # Write password to file, removing any newlines with tr
-    printf '%s' "$NEW_PASSWORD" | tr -d '\n' > "$keyfile"
+    # Write password to file without any newlines
+    printf '%s' "$NEW_PASSWORD" > "$keyfile"
     
-    # First verify the keyfile works with cryptsetup
+    # Debug: Verify keyfile was created properly (without exposing content)
+    if [[ ! -f "$keyfile" ]]; then
+        print_error "Failed to create keyfile"
+        return 1
+    fi
+    local keyfile_size
+    keyfile_size=$(stat -c%s "$keyfile")
+    print_info "Keyfile created: size=$keyfile_size bytes"
+    
+    # Verify the keyfile works with cryptsetup
     print_info "Verifying keyfile..."
-    # Note: We skip verification here as systemd-cryptenroll will fail anyway if password is wrong
-    # The correct test would be: cryptsetup open --test-passphrase --key-file "$keyfile" "$LUKS_DEVICE"
-    # But this requires the device name parameter which conflicts with --test-passphrase
+    if ! cryptsetup open --test-passphrase --key-file="$keyfile" "$LUKS_DEVICE" 2>/dev/null; then
+        shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
+        print_error "Keyfile verification failed. The password may be incorrect."
+        return 1
+    fi
     
     # Use --unlock-key-file option (available since systemd 252)
     print_info "Enrolling TPM2..."
@@ -400,6 +425,7 @@ bind_tpm2() {
         print_info "  - TPM2 device access issues"
         print_info "  - Existing TPM2 enrollment (use --wipe-slot=tpm2 first)"
         print_info "  - systemd-cryptenroll TPM2 support issues"
+        print_info "  - Keyfile authentication issues"
         print_info ""
         print_info "You may need to enroll manually with:"
         print_info "  systemd-cryptenroll $LUKS_DEVICE --tpm2-device=auto --tpm2-pcrs=7"
