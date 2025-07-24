@@ -286,26 +286,36 @@ show_luks_info() {
             # Show key slots with types
             echo "  Key slots:"
             if [[ "$luks_version" == "2" ]]; then
-                # For LUKS2, extract slot information with types
-                local slot_info
-                slot_info=$(cryptsetup luksDump "$device" 2>/dev/null | grep -E "^  [0-9]+: luks2" -A 3 || echo "")
-                if [[ -n "$slot_info" ]]; then
-                    # Parse each slot and its type
+                # For LUKS2, first build a map of slot types from tokens
+                local -A slot_types
+                local token_info
+                token_info=$(cryptsetup luksDump "$device" 2>/dev/null | sed -n '/^Tokens:/,/^[A-Z]/p' | grep -E "^\s+[0-9]+: |Keyslot:" || echo "")
+                
+                if [[ -n "$token_info" ]]; then
+                    local current_token_type=""
+                    while IFS= read -r line; do
+                        # Match token type (e.g., "0: systemd-tpm2" or "1: systemd-recovery")
+                        if [[ "$line" =~ ^[[:space:]]+[0-9]+:[[:space:]](.+)$ ]]; then
+                            current_token_type="${BASH_REMATCH[1]}"
+                        # Match keyslot number for current token
+                        elif [[ "$line" =~ Keyslot:[[:space:]]+([0-9]+) ]] && [[ -n "$current_token_type" ]]; then
+                            slot_types["${BASH_REMATCH[1]}"]="$current_token_type"
+                        fi
+                    done <<< "$token_info"
+                fi
+                
+                # Now list all keyslots with their types
+                local keyslot_info
+                keyslot_info=$(cryptsetup luksDump "$device" 2>/dev/null | grep -E "^  [0-9]+: luks2" || echo "")
+                
+                if [[ -n "$keyslot_info" ]]; then
                     while IFS= read -r line; do
                         if [[ "$line" =~ ^[[:space:]]+([0-9]+):[[:space:]]luks2 ]]; then
                             local slot_num="${BASH_REMATCH[1]}"
-                            # Look for the type in the next few lines
-                            local type_line
-                            type_line=$(cryptsetup luksDump "$device" 2>/dev/null | grep -A 5 "^  $slot_num: luks2" | grep -E "^\s+type:" | head -1 || echo "")
-                            if [[ -n "$type_line" ]]; then
-                                local slot_type
-                                slot_type=$(echo "$type_line" | awk '{print $2}')
-                                echo "    Slot $slot_num: $slot_type"
-                            else
-                                echo "    Slot $slot_num: (type unknown)"
-                            fi
+                            local slot_type="${slot_types[$slot_num]:-passphrase}"
+                            echo "    Slot $slot_num: $slot_type"
                         fi
-                    done <<< "$slot_info"
+                    done <<< "$keyslot_info"
                 else
                     echo "    No active slots found"
                 fi
