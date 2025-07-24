@@ -361,10 +361,24 @@ bind_tpm2() {
         keyfile_size=$(stat -c%s "$keyfile")
         print_info "Keyfile created: size=$keyfile_size bytes"
         
+        # Debug: Show hex dump of last few bytes (without exposing full password)
+        if command -v hexdump >/dev/null 2>&1; then
+            local hex_tail
+            hex_tail=$(tail -c 4 "$keyfile" | hexdump -C | grep -o '[0-9a-f ]*|' | head -1 || echo "unable to read")
+            print_info "Keyfile ends with hex: ...$hex_tail"
+        fi
+        
         # Verify the keyfile works with cryptsetup
-        if ! cryptsetup open --test-passphrase --key-file="$keyfile" "$LUKS_DEVICE" 2>/dev/null; then
+        local verify_output
+        verify_output=$(cryptsetup open --test-passphrase --key-file="$keyfile" "$LUKS_DEVICE" 2>&1)
+        local verify_result=$?
+        
+        if [[ $verify_result -ne 0 ]]; then
             shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
-            print_error "Keyfile verification failed. The password may be incorrect."
+            print_error "Keyfile verification failed (exit code: $verify_result)"
+            if [[ -n "$verify_output" ]]; then
+                print_error "cryptsetup error: $verify_output"
+            fi
             return 1
         fi
         
@@ -383,6 +397,15 @@ bind_tpm2() {
     print_info "Enrolling TPM2 with PCR 7 (Secure Boot state)..."
     print_info "Using current LUKS password to enroll TPM2"
     
+    # First verify the password works with stdin
+    print_info "Testing password with stdin method..."
+    if ! printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+        print_error "Password verification failed with stdin method"
+        print_error "The password appears to be incorrect for this LUKS device"
+        return 1
+    fi
+    print_success "Password verified with stdin method"
+    
     # Create secure temporary keyfile
     local keyfile
     keyfile=$(mktemp -p /run/systemd)
@@ -399,13 +422,33 @@ bind_tpm2() {
     keyfile_size=$(stat -c%s "$keyfile")
     print_info "Keyfile created: size=$keyfile_size bytes"
     
+    # Debug: Show hex dump of last few bytes (without exposing full password)
+    if command -v hexdump >/dev/null 2>&1; then
+        local hex_tail
+        hex_tail=$(tail -c 4 "$keyfile" | hexdump -C | grep -o '[0-9a-f ]*|' | head -1 || echo "unable to read")
+        print_info "Keyfile ends with hex: ...$hex_tail"
+    fi
+    
     # Verify the keyfile works with cryptsetup
     print_info "Verifying keyfile..."
-    if ! cryptsetup open --test-passphrase --key-file="$keyfile" "$LUKS_DEVICE" 2>/dev/null; then
+    # Show actual error for debugging
+    local verify_output
+    verify_output=$(cryptsetup open --test-passphrase --key-file="$keyfile" "$LUKS_DEVICE" 2>&1)
+    local verify_result=$?
+    
+    if [[ $verify_result -ne 0 ]]; then
         shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
-        print_error "Keyfile verification failed. The password may be incorrect."
+        print_error "Keyfile verification failed (exit code: $verify_result)"
+        if [[ -n "$verify_output" ]]; then
+            print_error "cryptsetup error: $verify_output"
+        fi
+        print_info "This usually means:"
+        print_info "  - The password is incorrect"
+        print_info "  - The device path is wrong"
+        print_info "  - The keyfile contains unexpected characters"
         return 1
     fi
+    print_success "Keyfile verified successfully"
     
     # Use --unlock-key-file option (available since systemd 252)
     print_info "Enrolling TPM2..."

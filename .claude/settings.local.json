@@ -21,7 +21,8 @@
       "WebFetch(domain:fossies.org)",
       "WebFetch(domain:github.com)",
       "Bash(printf:*)",
-      "WebFetch(domain:www.freedesktop.org)"
+      "WebFetch(domain:www.freedesktop.org)",
+      "WebFetch(domain:gitlab.com)"
     ],
     "deny": []
   }
