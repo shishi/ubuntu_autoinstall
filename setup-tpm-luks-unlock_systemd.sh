@@ -344,10 +344,19 @@ bind_tpm2() {
         
         # Remove existing TPM2 enrollment
         print_info "Removing existing TPM2 enrollment..."
-        if printf '%s' "$NEW_PASSWORD" | systemd-cryptenroll "$LUKS_DEVICE" --wipe-slot=tpm2 2>/dev/null; then
+        
+        # Use a temporary file to pass the password securely
+        local temp_pass_file
+        temp_pass_file=$(mktemp -p /dev/shm)
+        chmod 600 "$temp_pass_file"
+        printf '%s' "$NEW_PASSWORD" > "$temp_pass_file"
+        
+        if systemd-cryptenroll "$LUKS_DEVICE" --password="$temp_pass_file" --wipe-slot=tpm2 2>/dev/null; then
             print_success "Existing TPM2 enrollment removed"
+            rm -f "$temp_pass_file"
         else
             print_error "Failed to remove existing TPM2 enrollment"
+            rm -f "$temp_pass_file"
             return 1
         fi
     fi
@@ -356,13 +365,22 @@ bind_tpm2() {
     print_info "Enrolling TPM2 with PCR 7 (Secure Boot state)..."
     print_info "You'll need to enter the current LUKS password to enroll TPM2"
     
-    if printf '%s' "$NEW_PASSWORD" | systemd-cryptenroll "$LUKS_DEVICE" \
+    # Use a temporary file to pass the password securely
+    local temp_pass_file
+    temp_pass_file=$(mktemp -p /dev/shm)
+    chmod 600 "$temp_pass_file"
+    printf '%s' "$NEW_PASSWORD" > "$temp_pass_file"
+    
+    if systemd-cryptenroll "$LUKS_DEVICE" \
+        --password="$temp_pass_file" \
         --tpm2-device=auto \
         --tpm2-pcrs=7 \
         --tpm2-with-pin=no; then
         print_success "Successfully enrolled LUKS with TPM2"
+        rm -f "$temp_pass_file"
     else
         print_error "Failed to enroll LUKS with TPM2"
+        rm -f "$temp_pass_file"
         return 1
     fi
     
