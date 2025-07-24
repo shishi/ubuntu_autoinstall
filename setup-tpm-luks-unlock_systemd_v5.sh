@@ -282,7 +282,6 @@ setup_recovery_key() {
 # Function to get new LUKS password
 get_new_password() {
     print_info "Setting up new LUKS password..."
-    print_info "Note: If you want to keep your current LUKS password, just enter it again."
     
     # First, let's get the new password
     local temp_new_password=""
@@ -306,19 +305,17 @@ get_new_password() {
         fi
     done
     
-    # Check if this password already exists in LUKS
-    if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-        print_success "This password is already enrolled in LUKS"
-        NEEDS_NEW_PASSWORD=false
-    else
-        print_info "This is a new password that needs to be enrolled"
-        NEEDS_NEW_PASSWORD=true
-    fi
-    
+    # Always set the new password
     NEW_PASSWORD="$temp_new_password"
     
-    # Debug information
-    print_info "Password status: NEEDS_NEW_PASSWORD=$NEEDS_NEW_PASSWORD"
+    # Check if this password already exists in LUKS
+    if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+        print_info "This password is already enrolled in LUKS"
+        NEEDS_NEW_PASSWORD=false
+    else
+        print_info "This password needs to be enrolled"
+        NEEDS_NEW_PASSWORD=true
+    fi
 }
 
 # Function to confirm password removal
@@ -404,23 +401,18 @@ enroll_tpm2() {
 
 # Function to enroll new LUKS password
 enroll_new_password() {
-    print_info "Checking if new LUKS password enrollment is needed..."
-    print_info "NEEDS_NEW_PASSWORD=$NEEDS_NEW_PASSWORD"
-    
     if [[ "$NEEDS_NEW_PASSWORD" == "false" ]]; then
-        print_success "New LUKS password already enrolled, skipping"
+        print_info "Password already exists in LUKS, skipping enrollment"
         return 0
     fi
     
     print_info "Adding new LUKS password..."
-    print_info "Using CURRENT_PASSWORD to authenticate"
     
     # Add new password using current password
     if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
         print_success "New LUKS password enrolled successfully"
     else
         print_error "Failed to enroll new password"
-        print_error "This might happen if CURRENT_PASSWORD is no longer valid"
         return 1
     fi
 }
