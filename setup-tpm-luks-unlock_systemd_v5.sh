@@ -309,7 +309,20 @@ get_new_password() {
     NEW_PASSWORD="$temp_new_password"
     
     # Check if this password already exists in LUKS
-    print_warning "DEBUG: Checking if password exists in LUKS..."
+    print_warning "DEBUG: Checking if new password exists in LUKS..."
+    print_warning "DEBUG: Passwords are same: $([ "$CURRENT_PASSWORD" == "$temp_new_password" ] && echo "YES" || echo "NO")"
+    
+    # Check which slots have which passwords
+    print_warning "DEBUG: Checking all slots..."
+    for i in {0..7}; do
+        if printf '%s' "$CURRENT_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+            print_warning "DEBUG: Slot $i contains CURRENT_PASSWORD"
+        fi
+        if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+            print_warning "DEBUG: Slot $i contains NEW_PASSWORD"
+        fi
+    done
+    
     if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
         print_info "This password is already enrolled in LUKS"
         NEEDS_NEW_PASSWORD=false
