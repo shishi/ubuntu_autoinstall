@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TPM Health Check Script for systemd-cryptenroll (Version 2)
-# Idempotent version with proper flow and command validation
+# TPM Health Check Script for systemd-cryptenroll (Version 3)
+# Fixed version - only uses documented commands
 
 # Color codes
 RED='\033[0;31m'
@@ -90,13 +90,10 @@ check_tpm2_enrollments() {
             ((enrolled_devices++))
             print_success "TPM2 enrollment found on $device"
             
-            # Show enrollment details if running as root
-            if [[ $EUID -eq 0 ]] && command_exists systemd-cryptenroll; then
-                local enrollment_info
-                enrollment_info=$(systemd-cryptenroll "$device" --tpm2-device=list 2>&1 || echo "")
-                if [[ -n "$enrollment_info" ]] && [[ ! "$enrollment_info" =~ "Failed" ]]; then
-                    echo "$enrollment_info" | sed 's/^/    /'
-                fi
+            # Show basic enrollment info from luksDump
+            if [[ $EUID -eq 0 ]]; then
+                print_info "  TPM2 tokens in LUKS header:"
+                cryptsetup luksDump "$device" 2>/dev/null | grep -A2 "tpm2" | sed 's/^/    /' || true
             fi
         else
             print_info "No TPM2 enrollment on $device"
@@ -256,10 +253,10 @@ check_pre_update() {
     find_luks_devices || return 1
     
     # Check enrollments
-    check_tpm2_enrollments
+    check_tpm2_enrollments || true  # Continue even if no enrollments
     
     # Save PCR values
-    save_pcr_values
+    save_pcr_values || true  # Continue even if fails
     
     # Check recovery key
     check_recovery_key
@@ -282,10 +279,10 @@ check_post_update() {
     find_luks_devices || return 1
     
     # Check enrollments
-    check_tpm2_enrollments
+    check_tpm2_enrollments || true  # Continue even if no enrollments
     
     # Compare PCR values
-    compare_pcr_values
+    compare_pcr_values || true  # Continue even if fails
     
     # Check boot configuration
     check_boot_config
