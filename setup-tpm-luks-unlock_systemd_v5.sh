@@ -39,7 +39,7 @@ LUKS_DEVICE=""
 CURRENT_PASSWORD=""
 RECOVERY_KEY=""
 RECOVERY_KEY_FILE=""
-NEW_USER_PASSWORD=""
+NEW_PASSWORD=""
 OLD_PASSWORD=""
 
 # State tracking
@@ -315,54 +315,42 @@ get_new_password() {
         NEEDS_NEW_PASSWORD=true
     fi
     
-    NEW_USER_PASSWORD="$temp_new_password"
+    NEW_PASSWORD="$temp_new_password"
     
     # Debug information
     print_info "Password status: NEEDS_NEW_PASSWORD=$NEEDS_NEW_PASSWORD"
 }
 
-# Function to get old password - SIMPLIFIED VERSION
-get_old_password() {
-    print_info "Checking for old password to remove..."
+# Function to confirm password removal
+confirm_password_removal() {
+    print_info "Password removal options..."
     
     # Skip if we don't need a new password (everything is already set up)
     if [[ "$NEEDS_NEW_PASSWORD" == "false" ]] && [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
-        print_info "System is already configured. Skipping old password check."
+        print_info "System is already configured. No password changes needed."
         NEEDS_PASSWORD_REMOVAL=false
         return 0
     fi
     
-    # Simply ask if user wants to remove the old password
-    echo
-    print_info "Do you want to remove any old password (e.g., ubuntuKey)?"
-    read -r -p "Remove old password? (y/N): " response
-    
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        print_info "Skipping old password removal"
-        NEEDS_PASSWORD_REMOVAL=false
-        return 0
-    fi
-    
-    # Get the old password
-    read -r -s -p "Enter old password: " OLD_PASSWORD
-    echo
-    
-    if [[ -z "$OLD_PASSWORD" ]]; then
-        print_info "No password entered. Skipping removal."
-        NEEDS_PASSWORD_REMOVAL=false
-        return 0
-    fi
-    
-    # Test if this password exists
-    if printf '%s' "$OLD_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-        print_success "Old password verified"
-        NEEDS_PASSWORD_REMOVAL=true
-        return 0
+    # If the new password is different from current, offer to remove current password
+    if [[ "$CURRENT_PASSWORD" != "$NEW_PASSWORD" ]]; then
+        echo
+        print_info "Your current LUKS password is different from the new password."
+        print_info "Do you want to remove the current password after the new one is added?"
+        read -r -p "Remove current password after setup? (y/N): " response
+        
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            NEEDS_PASSWORD_REMOVAL=true
+            # Use CURRENT_PASSWORD as the password to remove
+            OLD_PASSWORD="$CURRENT_PASSWORD"
+            print_info "Current password will be removed after new password is enrolled"
+        else
+            NEEDS_PASSWORD_REMOVAL=false
+            print_info "Current password will be kept"
+        fi
     else
-        print_warning "Password doesn't match any slot. Skipping removal."
-        OLD_PASSWORD=""
+        print_info "New password is the same as current password. No removal needed."
         NEEDS_PASSWORD_REMOVAL=false
-        return 0
     fi
 }
 
@@ -428,7 +416,7 @@ enroll_new_password() {
     print_info "Using CURRENT_PASSWORD to authenticate"
     
     # Add new password using current password
-    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_USER_PASSWORD"); then
+    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
         print_success "New LUKS password enrolled successfully"
     else
         print_error "Failed to enroll new password"
@@ -440,70 +428,45 @@ enroll_new_password() {
 # Function to remove old passwords
 remove_old_passwords() {
     if [[ "$NEEDS_PASSWORD_REMOVAL" == "false" ]]; then
-        print_success "No old passwords to remove"
+        print_success "No passwords to remove"
         return 0
     fi
     
-    print_info "Removing old passwords..."
+    print_info "Removing old password..."
     show_luks_slots
     
-    # Remove old password if we have it
+    # OLD_PASSWORD should be the same as CURRENT_PASSWORD if user chose to remove it
     if [[ -n "$OLD_PASSWORD" ]]; then
         # Find which slot has this password
         local slot_found=""
         for i in {0..7}; do
             if printf '%s' "$OLD_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-                slot_found="$i"
-                print_info "Found old password in slot $i"
-                break
-            fi
-        done
-        
-        if [[ -n "$slot_found" ]]; then
-            # Use new password to remove the old slot
-            print_info "Removing old password..."
-            if printf '%s' "$NEW_USER_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$slot_found"; then
-                print_success "Old password removed from slot $slot_found"
-            else
-                print_error "Failed to remove old password"
-                return 1
-            fi
-        fi
-    fi
-    
-    # Remove the current password if it's different from the new one
-    if [[ "$CURRENT_PASSWORD" != "$NEW_USER_PASSWORD" ]] && [[ "$NEEDS_NEW_PASSWORD" == "true" ]]; then
-        print_info "Current password is different from new password"
-        print_info "Checking if current password should be removed..."
-        
-        # Find which slot has the current password
-        local current_slot=""
-        for i in {0..7}; do
-            if printf '%s' "$CURRENT_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-                # Make sure it's not a TPM slot or recovery key
+                # Make sure it's not a TPM slot or recovery key or new password
                 if ! cryptsetup luksDump "$LUKS_DEVICE" 2>/dev/null | grep -A5 "^  $i:" | grep -q "tpm2"; then
                     if ! printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-                        current_slot="$i"
-                        print_info "Found old current password in slot $i"
-                        break
+                        if ! printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+                            slot_found="$i"
+                            print_info "Found password to remove in slot $i"
+                            break
+                        else
+                            print_warning "Slot $i contains the new password, skipping"
+                        fi
                     fi
                 fi
             fi
         done
         
-        if [[ -n "$current_slot" ]]; then
-            # Ask for confirmation before removing
-            print_warning "Current password found in slot $current_slot"
-            read -r -p "Remove current password? (y/N): " confirm_remove
-            if [[ "$confirm_remove" =~ ^[Yy]$ ]]; then
-                if printf '%s' "$NEW_USER_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$current_slot"; then
-                    print_success "Old current password removed from slot $current_slot"
-                else
-                    print_warning "Failed to remove old current password"
-                fi
+        if [[ -n "$slot_found" ]]; then
+            # Use new password to remove the old slot
+            print_info "Removing password from slot $slot_found..."
+            if printf '%s' "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$slot_found"; then
+                print_success "Password removed from slot $slot_found"
             else
-                print_info "Keeping current password in slot $current_slot"
+                print_error "Failed to remove password"
+                return 1
             fi
+        else
+            print_warning "Could not find the password in any removable slot"
         fi
     fi
 }
@@ -531,7 +494,7 @@ verify_setup() {
     fi
     
     # Check new password
-    if printf '%s' "$NEW_USER_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    if printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
         print_success "✓ New LUKS password active"
     else
         print_error "✗ New LUKS password not working"
@@ -585,8 +548,8 @@ main() {
     # Step 5: Get new password
     get_new_password
     
-    # Step 6: Get old password (if needed)
-    get_old_password
+    # Step 6: Confirm password removal (if needed)
+    confirm_password_removal
     
     # Step 7: Enroll everything in correct order
     enroll_recovery_key || exit 1
