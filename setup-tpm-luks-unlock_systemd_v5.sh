@@ -279,34 +279,28 @@ setup_recovery_key() {
     echo
 }
 
-# Function to get new user password
+# Function to get new LUKS password
 get_new_password() {
-    print_info "Setting up user password..."
-    print_info "Note: If you want to keep your current password, just enter it again."
+    print_info "Setting up new LUKS password..."
+    print_info "Note: If you want to keep your current LUKS password, just enter it again."
     
     # First, let's get the new password
     local temp_new_password=""
     local password_valid=false
     
     while ! $password_valid; do
-        read -r -s -p "Enter new user password: " temp_new_password
+        read -r -s -p "Enter new LUKS password: " temp_new_password
         echo
-        read -r -s -p "Confirm new user password: " password_confirm
+        read -r -s -p "Confirm new LUKS password: " password_confirm
         echo
         
         if [[ "$temp_new_password" != "$password_confirm" ]]; then
             print_error "Passwords do not match"
         elif [[ ${#temp_new_password} -lt 8 ]]; then
             print_error "Password must be at least 8 characters long"
-        elif [[ "$temp_new_password" == "$CURRENT_PASSWORD" ]] && [[ "$NEEDS_NEW_PASSWORD" == "true" ]]; then
-            print_warning "New password is the same as current password"
-            # Check if it's already enrolled
-            if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-                print_info "This password is already enrolled, proceeding..."
-                password_valid=true
-            else
-                print_error "New password must be different from current password"
-            fi
+        elif [[ "$temp_new_password" == "$CURRENT_PASSWORD" ]]; then
+            print_info "New password is the same as current password"
+            password_valid=true
         else
             password_valid=true
         fi
@@ -317,11 +311,14 @@ get_new_password() {
         print_success "This password is already enrolled in LUKS"
         NEEDS_NEW_PASSWORD=false
     else
-        print_success "New password configured"
+        print_info "This is a new password that needs to be enrolled"
         NEEDS_NEW_PASSWORD=true
     fi
     
     NEW_USER_PASSWORD="$temp_new_password"
+    
+    # Debug information
+    print_info "Password status: NEEDS_NEW_PASSWORD=$NEEDS_NEW_PASSWORD"
 }
 
 # Function to get old password - SIMPLIFIED VERSION
@@ -417,20 +414,25 @@ enroll_tpm2() {
     update-initramfs -u -k all
 }
 
-# Function to enroll new user password
+# Function to enroll new LUKS password
 enroll_new_password() {
+    print_info "Checking if new LUKS password enrollment is needed..."
+    print_info "NEEDS_NEW_PASSWORD=$NEEDS_NEW_PASSWORD"
+    
     if [[ "$NEEDS_NEW_PASSWORD" == "false" ]]; then
-        print_success "New password already enrolled"
+        print_success "New LUKS password already enrolled, skipping"
         return 0
     fi
     
-    print_info "Adding new user password to LUKS..."
+    print_info "Adding new LUKS password..."
+    print_info "Using CURRENT_PASSWORD to authenticate"
     
     # Add new password using current password
     if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_USER_PASSWORD"); then
-        print_success "New user password enrolled successfully"
+        print_success "New LUKS password enrolled successfully"
     else
         print_error "Failed to enroll new password"
+        print_error "This might happen if CURRENT_PASSWORD is no longer valid"
         return 1
     fi
 }
@@ -530,9 +532,9 @@ verify_setup() {
     
     # Check new password
     if printf '%s' "$NEW_USER_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-        print_success "✓ New user password active"
+        print_success "✓ New LUKS password active"
     else
-        print_error "✗ New user password not working"
+        print_error "✗ New LUKS password not working"
         all_good=false
     fi
     
@@ -552,7 +554,7 @@ main() {
     echo "  1. Verify system requirements (TPM2, systemd version)"
     echo "  2. Get current LUKS password for authentication"
     echo "  3. Set up or reuse a recovery key"
-    echo "  4. Set a new user password"
+    echo "  4. Set a new LUKS password"
     echo "  5. Enroll TPM2 for automatic unlock"
     echo "  6. Remove old passwords (optional)"
     echo
