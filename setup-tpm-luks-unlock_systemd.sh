@@ -345,43 +345,44 @@ bind_tpm2() {
         # Remove existing TPM2 enrollment
         print_info "Removing existing TPM2 enrollment..."
         
-        # Use a temporary file to pass the password securely
-        local temp_pass_file
-        temp_pass_file=$(mktemp -p /dev/shm)
-        chmod 600 "$temp_pass_file"
-        printf '%s' "$NEW_PASSWORD" > "$temp_pass_file"
-        
-        if systemd-cryptenroll "$LUKS_DEVICE" --password="$temp_pass_file" --wipe-slot=tpm2 2>/dev/null; then
+        # Try environment variable method first (most secure)
+        if SYSTEMD_CRYPTENROLL_PASSWORD="$NEW_PASSWORD" systemd-cryptenroll "$LUKS_DEVICE" --wipe-slot=tpm2 2>/dev/null; then
             print_success "Existing TPM2 enrollment removed"
-            rm -f "$temp_pass_file"
         else
-            print_error "Failed to remove existing TPM2 enrollment"
-            rm -f "$temp_pass_file"
-            return 1
+            # Fallback: Use process substitution
+            if systemd-cryptenroll "$LUKS_DEVICE" --password <(printf '%s' "$NEW_PASSWORD") --wipe-slot=tpm2 2>/dev/null; then
+                print_success "Existing TPM2 enrollment removed"
+            else
+                print_error "Failed to remove existing TPM2 enrollment"
+                return 1
+            fi
         fi
     fi
     
     # Enroll TPM2 with PCR 7 (Secure Boot state)
     print_info "Enrolling TPM2 with PCR 7 (Secure Boot state)..."
-    print_info "You'll need to enter the current LUKS password to enroll TPM2"
+    print_info "Using current LUKS password to enroll TPM2"
     
-    # Use a temporary file to pass the password securely
-    local temp_pass_file
-    temp_pass_file=$(mktemp -p /dev/shm)
-    chmod 600 "$temp_pass_file"
-    printf '%s' "$NEW_PASSWORD" > "$temp_pass_file"
-    
-    if systemd-cryptenroll "$LUKS_DEVICE" \
-        --password="$temp_pass_file" \
+    # Try environment variable method first (most secure)
+    if SYSTEMD_CRYPTENROLL_PASSWORD="$NEW_PASSWORD" systemd-cryptenroll "$LUKS_DEVICE" \
         --tpm2-device=auto \
         --tpm2-pcrs=7 \
-        --tpm2-with-pin=no; then
+        --tpm2-with-pin=no 2>/dev/null; then
         print_success "Successfully enrolled LUKS with TPM2"
-        rm -f "$temp_pass_file"
     else
-        print_error "Failed to enroll LUKS with TPM2"
-        rm -f "$temp_pass_file"
-        return 1
+        # Fallback: Use process substitution (avoids file creation)
+        print_info "Trying alternative enrollment method..."
+        if systemd-cryptenroll "$LUKS_DEVICE" \
+            --password <(printf '%s' "$NEW_PASSWORD") \
+            --tpm2-device=auto \
+            --tpm2-pcrs=7 \
+            --tpm2-with-pin=no; then
+            print_success "Successfully enrolled LUKS with TPM2"
+        else
+            print_error "Failed to enroll LUKS with TPM2"
+            print_info "You may need to enroll manually with: systemd-cryptenroll $LUKS_DEVICE --tpm2-device=auto --tpm2-pcrs=7"
+            return 1
+        fi
     fi
     
     # Update initramfs
