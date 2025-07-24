@@ -353,7 +353,7 @@ bind_tpm2() {
         printf '%s' "$NEW_PASSWORD" | tr -d '\n' > "$keyfile"
         
         # First verify the keyfile works
-        if ! cryptsetup open --type luks --key-file "$keyfile" --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+        if ! cryptsetup luksOpen --key-file "$keyfile" --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
             shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
             print_error "Password verification failed"
             return 1
@@ -383,7 +383,7 @@ bind_tpm2() {
     
     # First verify the keyfile works with cryptsetup
     print_info "Verifying keyfile..."
-    if ! cryptsetup open --type luks --key-file "$keyfile" --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    if ! cryptsetup luksOpen --key-file "$keyfile" --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
         shred -n 1 -z "$keyfile" 2>/dev/null || rm -f "$keyfile"
         print_error "Password verification failed. The password may be incorrect."
         return 1
