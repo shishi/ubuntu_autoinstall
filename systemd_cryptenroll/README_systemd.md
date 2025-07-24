@@ -1,6 +1,6 @@
 # Ubuntu TPM2 LUKS Auto-unlock Scripts (systemd-cryptenroll版)
 
-このスクリプトではbootの設定が不完全です。動作にはsystemd-bootとdracut、それに合わせた設定が必要です。GRUBでは`tpm2-device=auto`はサポートされていません。Ubuntu 25.10以降でサポート状況が変わる予定です。特にubuntuのdracutはまだこのまわりが不完全な様子であるため、起動できる設定まではつくりませんでした。状況が変わったらまた試そうかと思います。とりあえず必要そうなことを末尾近くに書いておいたので、またやってみたくなった時に確認する。
+このスクリプトではbootの設定が不完全です。動作にはsystemd-bootとdracut、それに合わせた設定が必要です。GRUBでは`tpm2-device=auto`はサポートされていません。Ubuntu 25.10以降でサポート状況が変わる予定です。特にubuntuのdracutはまだこのまわりが不完全な様子であるため、起動できる設定まではつくりませんでした。状況が変わったらまた試そうかと思います。とりあえず必要そうなことを末尾近くに書いておいたので、またやってみたくなった時に確認する。いろいろやってみたが結局systemd-bootでも tpm2-device=autoが認識させられなかった。
 
 このドキュメントは、Ubuntu 24.04 LTSで**systemd-cryptenroll**を使用してTPM2を利用したLUKS暗号化ディスクの自動復号を設定するためのスクリプトについて説明します。
 
