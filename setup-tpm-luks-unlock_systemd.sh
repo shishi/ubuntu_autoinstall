@@ -334,6 +334,20 @@ setup_new_credentials() {
 bind_tpm2() {
     print_info "Binding LUKS to TPM2 using systemd-cryptenroll..."
     
+    # We need an existing valid password to authenticate with systemd-cryptenroll
+    # Get current password if not already obtained
+    local CURRENT_LUKS_PASSWORD=""
+    print_info "systemd-cryptenroll requires an existing LUKS password to authenticate"
+    read -r -s -p "Enter current LUKS password for TPM2 enrollment: " CURRENT_LUKS_PASSWORD
+    echo
+    
+    # Verify the password works
+    if ! printf '%s' "$CURRENT_LUKS_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+        print_error "Invalid LUKS password"
+        return 1
+    fi
+    print_success "Password verified"
+    
     # Check if already bound
     if check_tpm2_enrollment "$LUKS_DEVICE"; then
         read -r -p "TPM2 enrollment already exists. Replace it? (y/N): " response
@@ -350,7 +364,7 @@ bind_tpm2() {
         keyfile=$(mktemp -p /run/systemd)
         chmod 600 "$keyfile"
         # Write password to file without any newlines
-        printf '%s' "$NEW_PASSWORD" > "$keyfile"
+        printf '%s' "$CURRENT_LUKS_PASSWORD" > "$keyfile"
         
         # Debug: Verify keyfile was created properly (without exposing content)
         if [[ ! -f "$keyfile" ]]; then
@@ -399,7 +413,7 @@ bind_tpm2() {
     
     # First verify the password works with stdin
     print_info "Testing password with stdin method..."
-    if ! printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    if ! printf '%s' "$CURRENT_LUKS_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
         print_error "Password verification failed with stdin method"
         print_error "The password appears to be incorrect for this LUKS device"
         return 1
@@ -495,8 +509,11 @@ manage_key_slots() {
     # Show current slots
     show_luks_slots
     
-    # Get current password
-    print_info "Enter current LUKS password to continue:"
+    # If NEW_PASSWORD was set in setup_new_credentials, we need to add it
+    # Otherwise, we're just managing existing slots
+    
+    # Get current password (the one that currently works)
+    print_info "Enter a current LUKS password to manage key slots:"
     read -r -s -p "Current password: " CURRENT_PASSWORD
     echo
     
@@ -780,9 +797,9 @@ show_setup_plan() {
     echo "  2. Verify systemd version compatibility"
     echo "  3. Install required packages (if needed)"
     echo "  4. Set up or reuse recovery key"
-    echo "  5. Configure user password (optional if already set)"
-    echo "  6. Enroll LUKS with TPM2 using systemd-cryptenroll"
-    echo "  7. Manage LUKS key slots"
+    echo "  5. Configure new user password (if desired)"
+    echo "  6. Enroll LUKS with TPM2 using systemd-cryptenroll (requires existing password)"
+    echo "  7. Add new password and recovery key to LUKS (if applicable)"
     echo "  8. Remove the original installation password (ubuntuKey)"
     echo
     echo "The script is idempotent and can be run multiple times safely."
