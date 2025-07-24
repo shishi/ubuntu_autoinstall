@@ -309,12 +309,15 @@ get_new_password() {
     NEW_PASSWORD="$temp_new_password"
     
     # Check if this password already exists in LUKS
+    print_warning "DEBUG: Checking if password exists in LUKS..."
     if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
         print_info "This password is already enrolled in LUKS"
         NEEDS_NEW_PASSWORD=false
+        print_warning "DEBUG: Password exists, NEEDS_NEW_PASSWORD=false"
     else
         print_info "This password needs to be enrolled"
         NEEDS_NEW_PASSWORD=true
+        print_warning "DEBUG: Password does not exist, NEEDS_NEW_PASSWORD=true"
     fi
 }
 
@@ -401,18 +404,31 @@ enroll_tpm2() {
 
 # Function to enroll new LUKS password
 enroll_new_password() {
+    print_warning "DEBUG: enroll_new_password called"
+    print_warning "DEBUG: NEEDS_NEW_PASSWORD=$NEEDS_NEW_PASSWORD"
+    print_warning "DEBUG: CURRENT_PASSWORD is set: $([ -n "$CURRENT_PASSWORD" ] && echo "YES" || echo "NO")"
+    print_warning "DEBUG: NEW_PASSWORD is set: $([ -n "$NEW_PASSWORD" ] && echo "YES" || echo "NO")"
+    
     if [[ "$NEEDS_NEW_PASSWORD" == "false" ]]; then
         print_info "Password already exists in LUKS, skipping enrollment"
         return 0
     fi
     
     print_info "Adding new LUKS password..."
+    print_warning "DEBUG: About to run cryptsetup luksAddKey"
     
     # Add new password using current password
     if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
         print_success "New LUKS password enrolled successfully"
+        # Verify it was added
+        if printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+            print_success "DEBUG: Verified new password works"
+        else
+            print_error "DEBUG: New password verification failed!"
+        fi
     else
         print_error "Failed to enroll new password"
+        print_error "DEBUG: cryptsetup luksAddKey failed"
         return 1
     fi
 }
