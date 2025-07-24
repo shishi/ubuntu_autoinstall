@@ -314,12 +314,16 @@ get_new_password() {
     
     # Check which slots have which passwords
     print_warning "DEBUG: Checking all slots..."
+    print_info "Current LUKS slots status:"
+    cryptsetup luksDump "$LUKS_DEVICE" | grep -E "^  [0-9]+: " | head -8
+    
     for i in {0..7}; do
-        if printf '%s' "$CURRENT_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-            print_warning "DEBUG: Slot $i contains CURRENT_PASSWORD"
-        fi
-        if printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-            print_warning "DEBUG: Slot $i contains NEW_PASSWORD"
+        if cryptsetup luksDump "$LUKS_DEVICE" 2>/dev/null | grep -q "^  $i: luks2"; then
+            if printf '%s' "$CURRENT_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+                print_warning "DEBUG: Slot $i contains CURRENT_PASSWORD"
+            elif printf '%s' "$temp_new_password" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+                print_warning "DEBUG: Slot $i contains NEW_PASSWORD (this should not happen!)"
+            fi
         fi
     done
     
@@ -430,8 +434,25 @@ enroll_new_password() {
     print_info "Adding new LUKS password..."
     print_warning "DEBUG: About to run cryptsetup luksAddKey"
     
+    # Check for available slots
+    local available_slots=0
+    for i in {0..7}; do
+        if ! cryptsetup luksDump "$LUKS_DEVICE" 2>/dev/null | grep -q "^  $i: luks2"; then
+            ((available_slots++))
+            print_warning "DEBUG: Slot $i is available"
+        fi
+    done
+    
+    if [[ $available_slots -eq 0 ]]; then
+        print_error "No available slots! All 8 slots are in use."
+        print_error "Remove an existing password first."
+        return 1
+    fi
+    
+    print_info "DEBUG: $available_slots slot(s) available"
+    
     # Add new password using current password
-    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
+    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD") 2>&1; then
         print_success "New LUKS password enrolled successfully"
         # Verify it was added
         if printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
@@ -441,7 +462,7 @@ enroll_new_password() {
         fi
     else
         print_error "Failed to enroll new password"
-        print_error "DEBUG: cryptsetup luksAddKey failed"
+        print_error "DEBUG: cryptsetup luksAddKey failed - check if all slots are full"
         return 1
     fi
 }
