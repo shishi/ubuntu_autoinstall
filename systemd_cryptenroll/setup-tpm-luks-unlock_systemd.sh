@@ -13,25 +13,25 @@ NC='\033[0m' # No Color
 
 # Function to print colored output
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+  echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+  echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+  echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+  echo -e "${RED}[ERROR]${NC} $1"
 }
 
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
-   print_error "This script must be run as root"
-   exit 1
+  print_error "This script must be run as root"
+  exit 1
 fi
 
 # Global variables
@@ -50,524 +50,523 @@ NEEDS_PASSWORD_REMOVAL=true
 
 # Function to check if a command exists
 command_exists() {
-    command -v "$1" >/dev/null 2>&1
+  command -v "$1" >/dev/null 2>&1
 }
 
 # Function to generate a secure random recovery key
 generate_recovery_key() {
-    # Generate URL-safe base64 to avoid shell-breaking characters
-    openssl rand -base64 48 | tr -d '\n' | tr '+/' '-_'
+  # Generate URL-safe base64 to avoid shell-breaking characters
+  openssl rand -base64 48 | tr -d '\n' | tr '+/' '-_'
 }
 
 # Function to check TPM2 hardware availability
 check_tpm2_hardware() {
-    print_info "Checking TPM2 hardware availability..."
-    
-    if [[ -e /dev/tpm0 ]] || [[ -e /dev/tpmrm0 ]]; then
-        print_success "TPM2 hardware device found"
-        return 0
-    fi
-    
-    if [[ -d /sys/class/tpm/tpm0 ]]; then
-        print_success "TPM2 device found in sysfs"
-        return 0
-    fi
-    
-    print_error "No TPM2 hardware device found"
-    return 1
+  print_info "Checking TPM2 hardware availability..."
+
+  if [[ -e /dev/tpm0 ]] || [[ -e /dev/tpmrm0 ]]; then
+    print_success "TPM2 hardware device found"
+    return 0
+  fi
+
+  if [[ -d /sys/class/tpm/tpm0 ]]; then
+    print_success "TPM2 device found in sysfs"
+    return 0
+  fi
+
+  print_error "No TPM2 hardware device found"
+  return 1
 }
 
 # Function to check systemd version
 check_systemd_version() {
-    print_info "Checking systemd version..."
-    
-    local systemd_version
-    systemd_version=$(systemctl --version | head -1 | awk '{print $2}')
-    
-    if [[ -z "$systemd_version" ]]; then
-        print_error "Could not determine systemd version"
-        return 1
-    fi
-    
-    if [[ "$systemd_version" -lt 248 ]]; then
-        print_error "systemd version $systemd_version is too old. Version 248 or newer is required."
-        return 1
-    fi
-    
-    print_success "systemd version $systemd_version supports TPM2 enrollment"
-    
-    # Check for systemd-cryptenroll command
-    if ! command_exists systemd-cryptenroll; then
-        print_error "systemd-cryptenroll command not found"
-        print_info "Ubuntu 22.04 or newer is required"
-        return 1
-    fi
-    
-    return 0
+  print_info "Checking systemd version..."
+
+  local systemd_version
+  systemd_version=$(systemctl --version | head -1 | awk '{print $2}')
+
+  if [[ -z "$systemd_version" ]]; then
+    print_error "Could not determine systemd version"
+    return 1
+  fi
+
+  if [[ "$systemd_version" -lt 248 ]]; then
+    print_error "systemd version $systemd_version is too old. Version 248 or newer is required."
+    return 1
+  fi
+
+  print_success "systemd version $systemd_version supports TPM2 enrollment"
+
+  # Check for systemd-cryptenroll command
+  if ! command_exists systemd-cryptenroll; then
+    print_error "systemd-cryptenroll command not found"
+    print_info "Ubuntu 22.04 or newer is required"
+    return 1
+  fi
+
+  return 0
 }
 
 # Function to install required packages
 install_packages() {
-    print_info "Checking and installing required packages..."
-    
-    local packages=(
-        "systemd"
-        "systemd-boot"
-        "tpm2-tools"
-        "libtss2-dev"
-        "cryptsetup"
-        "cryptsetup-initramfs"
-    )
-    
-    local missing_packages=()
-    
-    for pkg in "${packages[@]}"; do
-        if ! dpkg -l | grep -q "^ii  $pkg "; then
-            missing_packages+=("$pkg")
-        fi
-    done
-    
-    if [[ ${#missing_packages[@]} -gt 0 ]]; then
-        print_info "Installing missing packages: ${missing_packages[*]}"
-        apt-get update
-        apt-get install -y "${missing_packages[@]}"
-    else
-        print_success "All required packages are already installed"
+  print_info "Checking and installing required packages..."
+
+  local packages=(
+    "systemd"
+    "systemd-boot"
+    "tpm2-tools"
+    "libtss2-dev"
+    "cryptsetup"
+    "cryptsetup-initramfs"
+  )
+
+  local missing_packages=()
+
+  for pkg in "${packages[@]}"; do
+    if ! dpkg -l | grep -q "^ii  $pkg "; then
+      missing_packages+=("$pkg")
     fi
+  done
+
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    print_info "Installing missing packages: ${missing_packages[*]}"
+    apt-get update
+    apt-get install -y "${missing_packages[@]}"
+  else
+    print_success "All required packages are already installed"
+  fi
 }
 
 # Function to find LUKS encrypted device
 find_luks_device() {
-    print_info "Looking for LUKS encrypted devices..."
-    
-    local luks_devices=()
-    
-    # Check common device patterns
-    for device in /dev/sd* /dev/nvme* /dev/vd*; do
-        if [[ -b "$device" ]] && cryptsetup isLuks "$device" 2>/dev/null; then
-            luks_devices+=("$device")
-        fi
+  print_info "Looking for LUKS encrypted devices..."
+
+  local luks_devices=()
+
+  # Check common device patterns
+  for device in /dev/sd* /dev/nvme* /dev/vd*; do
+    if [[ -b "$device" ]] && cryptsetup isLuks "$device" 2>/dev/null; then
+      luks_devices+=("$device")
+    fi
+  done
+
+  if [[ ${#luks_devices[@]} -eq 0 ]]; then
+    print_error "No LUKS encrypted devices found"
+    return 1
+  elif [[ ${#luks_devices[@]} -eq 1 ]]; then
+    LUKS_DEVICE="${luks_devices[0]}"
+    print_success "Found LUKS device: $LUKS_DEVICE"
+  else
+    print_warning "Multiple LUKS devices found:"
+    for i in "${!luks_devices[@]}"; do
+      echo "  $((i + 1)). ${luks_devices[$i]}"
     done
-    
-    if [[ ${#luks_devices[@]} -eq 0 ]]; then
-        print_error "No LUKS encrypted devices found"
-        return 1
-    elif [[ ${#luks_devices[@]} -eq 1 ]]; then
-        LUKS_DEVICE="${luks_devices[0]}"
-        print_success "Found LUKS device: $LUKS_DEVICE"
-    else
-        print_warning "Multiple LUKS devices found:"
-        for i in "${!luks_devices[@]}"; do
-            echo "  $((i+1)). ${luks_devices[$i]}"
-        done
-        read -r -p "Select device (1-${#luks_devices[@]}): " selection
-        LUKS_DEVICE="${luks_devices[$((selection-1))]}"
-    fi
-    
-    # Verify it's actually LUKS
-    if ! cryptsetup luksDump "$LUKS_DEVICE" >/dev/null 2>&1; then
-        print_error "Failed to verify LUKS device: $LUKS_DEVICE"
-        return 1
-    fi
-    
-    return 0
+    read -r -p "Select device (1-${#luks_devices[@]}): " selection
+    LUKS_DEVICE="${luks_devices[$((selection - 1))]}"
+  fi
+
+  # Verify it's actually LUKS
+  if ! cryptsetup luksDump "$LUKS_DEVICE" >/dev/null 2>&1; then
+    print_error "Failed to verify LUKS device: $LUKS_DEVICE"
+    return 1
+  fi
+
+  return 0
 }
 
 # Function to display current LUKS slots
 show_luks_slots() {
-    print_info "Current LUKS key slots for $LUKS_DEVICE:"
-    cryptsetup luksDump "$LUKS_DEVICE" | grep -E "^Key Slot|^  [0-9]+: luks2" | head -20
+  print_info "Current LUKS key slots for $LUKS_DEVICE:"
+  cryptsetup luksDump "$LUKS_DEVICE" | grep -E "^Key Slot|^  [0-9]+: luks2" | head -20
 }
 
 # Function to check if systemd-cryptenroll TPM2 binding exists
 check_tpm2_enrollment() {
-    local device="$1"
-    
-    if cryptsetup luksDump "$device" 2>/dev/null | grep -q "tpm2"; then
-        return 0
-    else
-        return 1
-    fi
+  local device="$1"
+
+  if cryptsetup luksDump "$device" 2>/dev/null | grep -q "tpm2"; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 # Function to check current state
 check_current_state() {
-    print_info "Checking current system state..."
-    
-    # Check for existing recovery keys
-    local existing_keys=()
-    if [[ -d /root ]] && find /root -maxdepth 1 -name ".luks-recovery-key-*.txt" -type f 2>/dev/null | grep -q .; then
-        readarray -t existing_keys < <(ls -t /root/.luks-recovery-key-*.txt 2>/dev/null)
-        if [[ ${#existing_keys[@]} -gt 0 ]]; then
-            # Try to read the most recent recovery key
-            local test_key_file="${existing_keys[0]}"
-            local test_key=$(grep "Recovery Key:" "$test_key_file" | cut -d: -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            if [[ -n "$test_key" ]] && printf '%s' "$test_key" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-                print_success "Found valid existing recovery key"
-                RECOVERY_KEY="$test_key"
-                RECOVERY_KEY_FILE="$test_key_file"
-                NEEDS_RECOVERY_KEY=false
-            fi
-        fi
+  print_info "Checking current system state..."
+
+  # Check for existing recovery keys
+  local existing_keys=()
+  if [[ -d /root ]] && find /root -maxdepth 1 -name ".luks-recovery-key-*.txt" -type f 2>/dev/null | grep -q .; then
+    readarray -t existing_keys < <(ls -t /root/.luks-recovery-key-*.txt 2>/dev/null)
+    if [[ ${#existing_keys[@]} -gt 0 ]]; then
+      # Try to read the most recent recovery key
+      local test_key_file="${existing_keys[0]}"
+      local test_key=$(grep "Recovery Key:" "$test_key_file" | cut -d: -f2- | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+      if [[ -n "$test_key" ]] && printf '%s' "$test_key" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+        print_success "Found valid existing recovery key"
+        RECOVERY_KEY="$test_key"
+        RECOVERY_KEY_FILE="$test_key_file"
+        NEEDS_RECOVERY_KEY=false
+      fi
     fi
-    
-    # Check TPM2 enrollment
-    if check_tpm2_enrollment "$LUKS_DEVICE"; then
-        print_success "TPM2 enrollment already exists"
-        NEEDS_TPM2_ENROLLMENT=false
-    else
-        print_info "TPM2 enrollment not found"
-    fi
-    
-    # Show summary
-    print_info "Current state summary:"
-    if [[ "$NEEDS_RECOVERY_KEY" == "false" ]]; then
-        print_info "  ✓ Recovery key exists"
-    else
-        print_info "  ✗ Recovery key needed"
-    fi
-    
-    if [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
-        print_info "  ✓ TPM2 enrolled"
-    else
-        print_info "  ✗ TPM2 enrollment needed"
-    fi
+  fi
+
+  # Check TPM2 enrollment
+  if check_tpm2_enrollment "$LUKS_DEVICE"; then
+    print_success "TPM2 enrollment already exists"
+    NEEDS_TPM2_ENROLLMENT=false
+  else
+    print_info "TPM2 enrollment not found"
+  fi
+
+  # Show summary
+  print_info "Current state summary:"
+  if [[ "$NEEDS_RECOVERY_KEY" == "false" ]]; then
+    print_info "  ✓ Recovery key exists"
+  else
+    print_info "  ✗ Recovery key needed"
+  fi
+
+  if [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
+    print_info "  ✓ TPM2 enrolled"
+  else
+    print_info "  ✗ TPM2 enrollment needed"
+  fi
 }
 
 # Function to get and verify current LUKS password
 get_current_password() {
-    print_info "Please provide a current LUKS password to authenticate operations"
-    
-    local password_valid=false
-    while ! $password_valid; do
-        read -r -s -p "Enter current LUKS password: " CURRENT_PASSWORD
-        echo
-        
-        # Verify the password
-        if printf '%s' "$CURRENT_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-            print_success "Password verified"
-            password_valid=true
-        else
-            print_error "Invalid password. Please try again."
-        fi
-    done
+  print_info "Please provide a current LUKS password to authenticate operations"
+
+  local password_valid=false
+  while ! $password_valid; do
+    read -r -s -p "Enter current LUKS password: " CURRENT_PASSWORD
+    echo
+
+    # Verify the password
+    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+      print_success "Password verified"
+      password_valid=true
+    else
+      print_error "Invalid password. Please try again."
+    fi
+  done
 }
 
 # Function to setup recovery key
 setup_recovery_key() {
-    if [[ "$NEEDS_RECOVERY_KEY" == "false" ]]; then
-        print_info "Recovery key already exists and is valid"
-        return 0
-    fi
-    
-    print_info "Setting up new recovery key..."
-    
-    # Generate new recovery key
-    RECOVERY_KEY=$(generate_recovery_key)
-    RECOVERY_KEY_FILE="/root/.luks-recovery-key-$(date +%Y%m%d-%H%M%S).txt"
-    
-    {
-        echo "LUKS Recovery Key for $LUKS_DEVICE"
-        echo "Generated on: $(date)"
-        echo "Recovery Key: $RECOVERY_KEY"
-    } > "$RECOVERY_KEY_FILE"
-    
-    chmod 600 "$RECOVERY_KEY_FILE"
-    print_success "Recovery key saved to: $RECOVERY_KEY_FILE"
-    print_warning "IMPORTANT: Save this recovery key in a secure location!"
-    echo
+  if [[ "$NEEDS_RECOVERY_KEY" == "false" ]]; then
+    print_info "Recovery key already exists and is valid"
+    return 0
+  fi
+
+  print_info "Setting up new recovery key..."
+
+  # Generate new recovery key
+  RECOVERY_KEY=$(generate_recovery_key)
+  RECOVERY_KEY_FILE="/root/.luks-recovery-key-$(date +%Y%m%d-%H%M%S).txt"
+
+  {
+    echo "LUKS Recovery Key for $LUKS_DEVICE"
+    echo "Generated on: $(date)"
     echo "Recovery Key: $RECOVERY_KEY"
-    echo
+  } >"$RECOVERY_KEY_FILE"
+
+  chmod 600 "$RECOVERY_KEY_FILE"
+  print_success "Recovery key saved to: $RECOVERY_KEY_FILE"
+  print_warning "IMPORTANT: Save this recovery key in a secure location!"
+  echo
+  echo "Recovery Key: $RECOVERY_KEY"
+  echo
 }
 
 # Function to get new LUKS password
 get_new_password() {
-    print_info "Setting up new LUKS password..."
-    
-    # First, let's get the new password
-    local temp_new_password=""
-    local password_valid=false
-    
-    while ! $password_valid; do
-        read -r -s -p "Enter new LUKS password: " temp_new_password
-        echo
-        read -r -s -p "Confirm new LUKS password: " password_confirm
-        echo
-        
-        if [[ "$temp_new_password" != "$password_confirm" ]]; then
-            print_error "Passwords do not match"
-        elif [[ ${#temp_new_password} -lt 8 ]]; then
-            print_error "Password must be at least 8 characters long"
-        elif [[ "$temp_new_password" == "$CURRENT_PASSWORD" ]]; then
-            print_info "New password is the same as current password"
-            password_valid=true
-        else
-            password_valid=true
-        fi
-    done
-    
-    # Always set the new password
-    NEW_PASSWORD="$temp_new_password"
-    
-    
-    # Check if this password already exists in LUKS using luksOpen
-    local test_device="luks-test-$$"
-    if printf '%s' "$temp_new_password" | cryptsetup luksOpen "$LUKS_DEVICE" "$test_device" 2>/dev/null; then
-        cryptsetup luksClose "$test_device" 2>/dev/null
-        print_info "This password is already enrolled in LUKS"
-        NEEDS_NEW_PASSWORD=false
+  print_info "Setting up new LUKS password..."
+
+  # First, let's get the new password
+  local temp_new_password=""
+  local password_valid=false
+
+  while ! $password_valid; do
+    read -r -s -p "Enter new LUKS password: " temp_new_password
+    echo
+    read -r -s -p "Confirm new LUKS password: " password_confirm
+    echo
+
+    if [[ "$temp_new_password" != "$password_confirm" ]]; then
+      print_error "Passwords do not match"
+    elif [[ ${#temp_new_password} -lt 8 ]]; then
+      print_error "Password must be at least 8 characters long"
+    elif [[ "$temp_new_password" == "$CURRENT_PASSWORD" ]]; then
+      print_info "New password is the same as current password"
+      password_valid=true
     else
-        print_info "This password needs to be enrolled"
-        NEEDS_NEW_PASSWORD=true
+      password_valid=true
     fi
+  done
+
+  # Always set the new password
+  NEW_PASSWORD="$temp_new_password"
+
+  # Check if this password already exists in LUKS using luksOpen
+  local test_device="luks-test-$$"
+  if printf '%s' "$temp_new_password" | cryptsetup luksOpen "$LUKS_DEVICE" "$test_device" 2>/dev/null; then
+    cryptsetup luksClose "$test_device" 2>/dev/null
+    print_info "This password is already enrolled in LUKS"
+    NEEDS_NEW_PASSWORD=false
+  else
+    print_info "This password needs to be enrolled"
+    NEEDS_NEW_PASSWORD=true
+  fi
 }
 
 # Function to confirm password removal
 confirm_password_removal() {
-    print_info "Password removal options..."
-    
-    # Skip if we don't need a new password (everything is already set up)
-    if [[ "$NEEDS_NEW_PASSWORD" == "false" ]] && [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
-        print_info "System is already configured. No password changes needed."
-        NEEDS_PASSWORD_REMOVAL=false
-        return 0
-    fi
-    
-    # If the new password is different from current, offer to remove current password
-    if [[ "$CURRENT_PASSWORD" != "$NEW_PASSWORD" ]]; then
-        echo
-        print_info "Your current LUKS password is different from the new password."
-        print_info "Do you want to remove the current password after the new one is added?"
-        read -r -p "Remove current password after setup? (y/N): " response
-        
-        if [[ "$response" =~ ^[Yy]$ ]]; then
-            NEEDS_PASSWORD_REMOVAL=true
-            # Use CURRENT_PASSWORD as the password to remove
-            OLD_PASSWORD="$CURRENT_PASSWORD"
-            print_info "Current password will be removed after new password is enrolled"
-        else
-            NEEDS_PASSWORD_REMOVAL=false
-            print_info "Current password will be kept"
-        fi
+  print_info "Password removal options..."
+
+  # Skip if we don't need a new password (everything is already set up)
+  if [[ "$NEEDS_NEW_PASSWORD" == "false" ]] && [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
+    print_info "System is already configured. No password changes needed."
+    NEEDS_PASSWORD_REMOVAL=false
+    return 0
+  fi
+
+  # If the new password is different from current, offer to remove current password
+  if [[ "$CURRENT_PASSWORD" != "$NEW_PASSWORD" ]]; then
+    echo
+    print_info "Your current LUKS password is different from the new password."
+    print_info "Do you want to remove the current password after the new one is added?"
+    read -r -p "Remove current password after setup? (y/N): " response
+
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+      NEEDS_PASSWORD_REMOVAL=true
+      # Use CURRENT_PASSWORD as the password to remove
+      OLD_PASSWORD="$CURRENT_PASSWORD"
+      print_info "Current password will be removed after new password is enrolled"
     else
-        print_info "New password is the same as current password. No removal needed."
-        NEEDS_PASSWORD_REMOVAL=false
+      NEEDS_PASSWORD_REMOVAL=false
+      print_info "Current password will be kept"
     fi
+  else
+    print_info "New password is the same as current password. No removal needed."
+    NEEDS_PASSWORD_REMOVAL=false
+  fi
 }
 
 # Function to enroll recovery key
 enroll_recovery_key() {
-    print_info "Enrolling recovery key in LUKS..."
-    
-    # Check if recovery key already exists
-    if printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-        print_success "Recovery key already enrolled"
-        return 0
-    fi
-    
-    # Add recovery key using current password
-    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$RECOVERY_KEY"); then
-        print_success "Recovery key enrolled successfully"
-    else
-        print_error "Failed to enroll recovery key"
-        return 1
-    fi
+  print_info "Enrolling recovery key in LUKS..."
+
+  # Check if recovery key already exists
+  if printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    print_success "Recovery key already enrolled"
+    return 0
+  fi
+
+  # Add recovery key using current password
+  if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$RECOVERY_KEY"); then
+    print_success "Recovery key enrolled successfully"
+  else
+    print_error "Failed to enroll recovery key"
+    return 1
+  fi
 }
 
 # Function to enroll TPM2
 enroll_tpm2() {
-    if [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
-        print_success "TPM2 already enrolled"
-        return 0
-    fi
-    
-    print_info "Enrolling TPM2 for automatic unlock..."
-    
-    # Enroll TPM2 with PCR 7 (Secure Boot state)
-    print_info "Enrolling TPM2 with PCR 7..."
-    if PASSWORD="$CURRENT_PASSWORD" systemd-cryptenroll "$LUKS_DEVICE" \
-        --tpm2-device=auto \
-        --tpm2-pcrs=7 \
-        --tpm2-with-pin=no; then
-        print_success "TPM2 enrolled successfully"
-    else
-        print_error "Failed to enroll TPM2"
-        print_info "Common causes:"
-        print_info "  - TPM2 device not accessible"
-        print_info "  - systemd-cryptenroll TPM2 support issues"
-        return 1
-    fi
-    
-    # Update initramfs
-    print_info "Updating initramfs..."
-    update-initramfs -u -k all
+  if [[ "$NEEDS_TPM2_ENROLLMENT" == "false" ]]; then
+    print_success "TPM2 already enrolled"
+    return 0
+  fi
+
+  print_info "Enrolling TPM2 for automatic unlock..."
+
+  # Enroll TPM2 with PCR 7 (Secure Boot state)
+  print_info "Enrolling TPM2 with PCR 7..."
+  if PASSWORD="$CURRENT_PASSWORD" systemd-cryptenroll "$LUKS_DEVICE" \
+    --tpm2-device=auto \
+    --tpm2-pcrs=7 \
+    --tpm2-with-pin=no; then
+    print_success "TPM2 enrolled successfully"
+  else
+    print_error "Failed to enroll TPM2"
+    print_info "Common causes:"
+    print_info "  - TPM2 device not accessible"
+    print_info "  - systemd-cryptenroll TPM2 support issues"
+    return 1
+  fi
+
+  # Update initramfs
+  print_info "Updating initramfs..."
+  update-initramfs -u -k all
 }
 
 # Function to enroll new LUKS password
 enroll_new_password() {
-    if [[ "$NEEDS_NEW_PASSWORD" == "false" ]]; then
-        print_info "Password already exists in LUKS, skipping enrollment"
-        return 0
-    fi
-    
-    print_info "Adding new LUKS password..."
-    
-    # Add new password using current password
-    if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
-        print_success "New LUKS password enrolled successfully"
-    else
-        print_error "Failed to enroll new password"
-        return 1
-    fi
+  if [[ "$NEEDS_NEW_PASSWORD" == "false" ]]; then
+    print_info "Password already exists in LUKS, skipping enrollment"
+    return 0
+  fi
+
+  print_info "Adding new LUKS password..."
+
+  # Add new password using current password
+  if printf '%s' "$CURRENT_PASSWORD" | cryptsetup luksAddKey "$LUKS_DEVICE" <(printf '%s' "$NEW_PASSWORD"); then
+    print_success "New LUKS password enrolled successfully"
+  else
+    print_error "Failed to enroll new password"
+    return 1
+  fi
 }
 
 # Function to remove old passwords
 remove_old_passwords() {
-    if [[ "$NEEDS_PASSWORD_REMOVAL" == "false" ]]; then
-        print_success "No passwords to remove"
-        return 0
-    fi
-    
-    print_info "Removing old password..."
-    show_luks_slots
-    
-    # OLD_PASSWORD should be the same as CURRENT_PASSWORD if user chose to remove it
-    if [[ -n "$OLD_PASSWORD" ]]; then
-        # Find which slot has this password
-        local slot_found=""
-        for i in {0..7}; do
-            if printf '%s' "$OLD_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-                # Make sure it's not a TPM slot or recovery key or new password
-                if ! cryptsetup luksDump "$LUKS_DEVICE" 2>/dev/null | grep -A5 "^  $i:" | grep -q "tpm2"; then
-                    if ! printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-                        if ! printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
-                            slot_found="$i"
-                            print_info "Found password to remove in slot $i"
-                            break
-                        else
-                            print_warning "Slot $i contains the new password, skipping"
-                        fi
-                    fi
-                fi
-            fi
-        done
-        
-        if [[ -n "$slot_found" ]]; then
-            # Use new password to remove the old slot
-            print_info "Removing password from slot $slot_found..."
-            if printf '%s' "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$slot_found"; then
-                print_success "Password removed from slot $slot_found"
+  if [[ "$NEEDS_PASSWORD_REMOVAL" == "false" ]]; then
+    print_success "No passwords to remove"
+    return 0
+  fi
+
+  print_info "Removing old password..."
+  show_luks_slots
+
+  # OLD_PASSWORD should be the same as CURRENT_PASSWORD if user chose to remove it
+  if [[ -n "$OLD_PASSWORD" ]]; then
+    # Find which slot has this password
+    local slot_found=""
+    for i in {0..7}; do
+      if printf '%s' "$OLD_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+        # Make sure it's not a TPM slot or recovery key or new password
+        if ! cryptsetup luksDump "$LUKS_DEVICE" 2>/dev/null | grep -A5 "^  $i:" | grep -q "tpm2"; then
+          if ! printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+            if ! printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" --key-slot "$i" 2>/dev/null; then
+              slot_found="$i"
+              print_info "Found password to remove in slot $i"
+              break
             else
-                print_error "Failed to remove password"
-                return 1
+              print_warning "Slot $i contains the new password, skipping"
             fi
-        else
-            print_warning "Could not find the password in any removable slot"
+          fi
         fi
+      fi
+    done
+
+    if [[ -n "$slot_found" ]]; then
+      # Use new password to remove the old slot
+      print_info "Removing password from slot $slot_found..."
+      if printf '%s' "$NEW_PASSWORD" | cryptsetup luksKillSlot "$LUKS_DEVICE" "$slot_found"; then
+        print_success "Password removed from slot $slot_found"
+      else
+        print_error "Failed to remove password"
+        return 1
+      fi
+    else
+      print_warning "Could not find the password in any removable slot"
     fi
+  fi
 }
 
 # Function to verify final setup
 verify_setup() {
-    print_info "Verifying final setup..."
-    
-    local all_good=true
-    
-    # Check TPM2 enrollment
-    if check_tpm2_enrollment "$LUKS_DEVICE"; then
-        print_success "✓ TPM2 enrollment active"
-    else
-        print_error "✗ TPM2 enrollment missing"
-        all_good=false
-    fi
-    
-    # Check recovery key
-    if printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-        print_success "✓ Recovery key active"
-    else
-        print_error "✗ Recovery key not working"
-        all_good=false
-    fi
-    
-    # Check new password
-    if printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
-        print_success "✓ New LUKS password active"
-    else
-        print_error "✗ New LUKS password not working"
-        all_good=false
-    fi
-    
-    # Show final slot status
-    print_info "Final LUKS key slots:"
-    show_luks_slots
-    
-    return $([ "$all_good" = true ] && echo 0 || echo 1)
+  print_info "Verifying final setup..."
+
+  local all_good=true
+
+  # Check TPM2 enrollment
+  if check_tpm2_enrollment "$LUKS_DEVICE"; then
+    print_success "✓ TPM2 enrollment active"
+  else
+    print_error "✗ TPM2 enrollment missing"
+    all_good=false
+  fi
+
+  # Check recovery key
+  if printf '%s' "$RECOVERY_KEY" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    print_success "✓ Recovery key active"
+  else
+    print_error "✗ Recovery key not working"
+    all_good=false
+  fi
+
+  # Check new password
+  if printf '%s' "$NEW_PASSWORD" | cryptsetup open --test-passphrase "$LUKS_DEVICE" 2>/dev/null; then
+    print_success "✓ New LUKS password active"
+  else
+    print_error "✗ New LUKS password not working"
+    all_good=false
+  fi
+
+  # Show final slot status
+  print_info "Final LUKS key slots:"
+  show_luks_slots
+
+  return $([ "$all_good" = true ] && echo 0 || echo 1)
 }
 
 # Main function
 main() {
-    print_info "TPM2 LUKS Auto-unlock Setup (systemd-cryptenroll) - Version 5"
-    echo "======================================================================"
+  print_info "TPM2 LUKS Auto-unlock Setup (systemd-cryptenroll) - Version 5"
+  echo "======================================================================"
+  echo
+  echo "This script will:"
+  echo "  1. Verify system requirements (TPM2, systemd version)"
+  echo "  2. Get current LUKS password for authentication"
+  echo "  3. Set up or reuse a recovery key"
+  echo "  4. Set a new LUKS password"
+  echo "  5. Enroll TPM2 for automatic unlock"
+  echo "  6. Remove old passwords (optional)"
+  echo
+  echo "The script is idempotent and can be run multiple times safely."
+  echo
+
+  read -r -p "Continue? (y/N): " response
+  if [[ ! "$response" =~ ^[Yy]$ ]]; then
+    print_info "Setup cancelled"
+    exit 0
+  fi
+
+  # Step 1: Check prerequisites
+  check_tpm2_hardware || exit 1
+  check_systemd_version || exit 1
+  find_luks_device || exit 1
+  install_packages
+
+  # Step 2: Check current state
+  check_current_state
+
+  # Step 3: Get current working password
+  get_current_password
+
+  # Step 4: Set up recovery key (if needed)
+  setup_recovery_key || exit 1
+
+  # Step 5: Get new password
+  get_new_password
+
+  # Step 6: Confirm password removal (if needed)
+  confirm_password_removal
+
+  # Step 7: Enroll everything in correct order
+  enroll_recovery_key || exit 1
+  enroll_tpm2 || exit 1
+  enroll_new_password || exit 1
+
+  # Step 8: Remove old passwords
+  if [[ "$NEEDS_PASSWORD_REMOVAL" == "true" ]]; then
+    remove_old_passwords || print_warning "Some passwords could not be removed"
+  fi
+
+  # Step 9: Verify setup
+  if verify_setup; then
     echo
-    echo "This script will:"
-    echo "  1. Verify system requirements (TPM2, systemd version)"
-    echo "  2. Get current LUKS password for authentication"
-    echo "  3. Set up or reuse a recovery key"
-    echo "  4. Set a new LUKS password"
-    echo "  5. Enroll TPM2 for automatic unlock"
-    echo "  6. Remove old passwords (optional)"
+    print_success "Setup completed successfully!"
+    print_info "The system will now unlock automatically using TPM2 on boot"
+    print_warning "Keep your recovery key safe: $RECOVERY_KEY_FILE"
+  else
     echo
-    echo "The script is idempotent and can be run multiple times safely."
-    echo
-    
-    read -r -p "Continue? (y/N): " response
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        print_info "Setup cancelled"
-        exit 0
-    fi
-    
-    # Step 1: Check prerequisites
-    check_tpm2_hardware || exit 1
-    check_systemd_version || exit 1
-    find_luks_device || exit 1
-    install_packages
-    
-    # Step 2: Check current state
-    check_current_state
-    
-    # Step 3: Get current working password
-    get_current_password
-    
-    # Step 4: Set up recovery key (if needed)
-    setup_recovery_key || exit 1
-    
-    # Step 5: Get new password
-    get_new_password
-    
-    # Step 6: Confirm password removal (if needed)
-    confirm_password_removal
-    
-    # Step 7: Enroll everything in correct order
-    enroll_recovery_key || exit 1
-    enroll_tpm2 || exit 1
-    enroll_new_password || exit 1
-    
-    # Step 8: Remove old passwords
-    if [[ "$NEEDS_PASSWORD_REMOVAL" == "true" ]]; then
-        remove_old_passwords || print_warning "Some passwords could not be removed"
-    fi
-    
-    # Step 9: Verify setup
-    if verify_setup; then
-        echo
-        print_success "Setup completed successfully!"
-        print_info "The system will now unlock automatically using TPM2 on boot"
-        print_warning "Keep your recovery key safe: $RECOVERY_KEY_FILE"
-    else
-        echo
-        print_error "Setup completed with some issues. Please check the errors above."
-        exit 1
-    fi
+    print_error "Setup completed with some issues. Please check the errors above."
+    exit 1
+  fi
 }
 
 # Run main function
