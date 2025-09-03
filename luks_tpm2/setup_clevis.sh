@@ -80,18 +80,17 @@ fi
 echo "スロット2にClevisでTPM2バインディングを設定中..."
 clevis luks bind -d "$LUKS_DEVICE" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' -s 2
 
-# たぶんここはautoisntallの次点でできてる
-# # crypttabの更新（clevis用）
-# echo "crypttabを更新中..."
-# LUKS_UUID=$(cryptsetup luksUUID "$LUKS_DEVICE")
-# cp /etc/crypttab /etc/crypttab.bak
-#
-# if grep -q "$LUKS_UUID" /etc/crypttab; then
-#   sed -i "s|^.*$LUKS_UUID.*|$MAPPING_NAME UUID=$LUKS_UUID none luks,discard,_netdev,clevis|" /etc/crypttab
-#
-# else
-#   echo "$MAPPING_NAME UUID=$LUKS_UUID none luks,discard,_netdev,clevis" >>/etc/crypttab
-# fi
+# crypttabの更新
+echo "crypttabを更新中..."
+LUKS_UUID=$(cryptsetup luksUUID "$LUKS_DEVICE")
+cp /etc/crypttab /etc/crypttab.bak
+
+if grep -q "$LUKS_UUID" /etc/crypttab; then
+  sed -i "s|^.*$LUKS_UUID.*|$MAPPING_NAME UUID=$LUKS_UUID none luks|" /etc/crypttab
+
+else
+  echo "$MAPPING_NAME UUID=$LUKS_UUID none luks" >>/etc/crypttab
+fi
 
 # dracut/initramfsの更新
 echo "initramfsを更新中..."
